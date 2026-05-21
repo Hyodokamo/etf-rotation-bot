@@ -1,0 +1,21 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# Environment variables
+.env
+
+# Outputs
+outputs/*
+!outputs/.gitkeep
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/

@@ -1,0 +1,19 @@
+﻿name: Slack Notification Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"  # 毎日09:00 JST
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Slack notification
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{"text":"GitHub ActionsからSlack通知のテストです。"}' \
+            "$SLACK_WEBHOOK_URL"

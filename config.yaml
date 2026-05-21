@@ -1,0 +1,185 @@
+universe:
+  assets:
+    - asset_id: sp500
+      ticker: VOO
+      display_name: S&P500
+      category: core_equity
+      include_stage: production
+    - asset_id: ex_us_equity
+      ticker: VXUS
+      display_name: 米国外株式
+      category: core_equity
+      include_stage: production
+    - asset_id: topix_jpy
+      ticker: "1306.T"
+      display_name: TOPIX
+      category: core_equity
+      include_stage: production
+    - asset_id: emerging
+      ticker: VWO
+      display_name: 新興国全体
+      category: core_equity
+      include_stage: production
+    - asset_id: nasdaq100
+      ticker: QQQM
+      display_name: NASDAQ100
+      category: growth_equity
+      include_stage: production
+    - asset_id: us_semiconductor
+      ticker: SMH
+      display_name: 米国半導体
+      category: theme_equity
+      include_stage: production
+    - asset_id: india_equity
+      ticker: INDA
+      display_name: インド株
+      category: emerging_equity
+      include_stage: production
+    - asset_id: us_long_bond
+      ticker: TLT
+      display_name: 米国長期国債
+      category: bond
+      include_stage: production
+    - asset_id: us_mid_bond
+      ticker: IEF
+      display_name: 米国中期国債
+      category: bond
+      include_stage: production
+    - asset_id: us_short_cash
+      ticker: SGOV
+      display_name: 米国超短期国債
+      category: cash_like
+      include_stage: production
+    - asset_id: gold_usd
+      ticker: GLDM
+      display_name: ゴールド
+      category: commodity
+      include_stage: production
+    - asset_id: j_reit
+      ticker: "1343.T"
+      display_name: J-REIT
+      category: reit
+      include_stage: production
+    - asset_id: us_reit
+      ticker: VNQ
+      display_name: 米国REIT
+      category: reit
+      include_stage: production
+    - asset_id: us_small_cap
+      ticker: IWM
+      display_name: 米国小型株
+      category: small_cap
+      include_stage: production
+    - asset_id: healthcare
+      ticker: XLV
+      display_name: ヘルスケア
+      category: sector
+      include_stage: production
+    - asset_id: energy
+      ticker: XLE
+      display_name: エネルギー
+      category: sector
+      include_stage: production
+    - asset_id: industrials
+      ticker: XLI
+      display_name: 資本財
+      category: sector
+      include_stage: production
+    - asset_id: financials
+      ticker: XLF
+      display_name: 金融
+      category: sector
+      include_stage: production
+    - asset_id: us_dollar
+      ticker: UUP
+      display_name: 米ドル
+      category: fx
+      include_stage: production
+    - asset_id: japan_bond
+      ticker: "2561.T"
+      display_name: 日本国債
+      category: bond
+      include_stage: production
+    - asset_id: us_value
+      ticker: VTV
+      display_name: 米国バリュー
+      category: factor
+      include_stage: production
+    - asset_id: us_momentum
+      ticker: MTUM
+      display_name: 米国モメンタム
+      category: factor
+      include_stage: production
+    - asset_id: gold_jpy
+      ticker: "1540.T"
+      display_name: 国内金
+      category: commodity
+      include_stage: production
+    - asset_id: us_aggregate_bond
+      ticker: BND
+      display_name: 米国総合債券
+      category: bond
+      include_stage: production
+    - asset_id: commodities
+      ticker: DBC
+      display_name: コモディティ総合
+      category: commodity
+      include_stage: production
+
+scoring:
+  momentum_windows:
+    mom_1m: 21
+    mom_3m: 63
+    mom_6m: 126
+    mom_12m: 252
+  momentum_weights:
+    mom_1m: 0.10
+    mom_3m: 0.20
+    mom_6m: 0.30
+    mom_12m: 0.40
+  trend_sma_windows:
+    - 50
+    - 200
+  trend_bonus_per_sma: 0.05
+  volatility_window: 20
+  # リスク調整: スコアをボラティリティで割って低ボラ資産を優遇
+  vol_adjust: true
+
+allocation:
+  method: score_proportional
+  top_n: 15
+  min_assets: 5
+
+risk:
+  max_weight_per_asset: 0.25
+  min_weight_per_selected: 0.02
+  max_category_weights:
+    core_equity: 0.50
+    growth_equity: 0.25
+    theme_equity: 0.15
+    emerging_equity: 0.15
+    bond: 0.45
+    cash_like: 0.40
+    commodity: 0.20
+    reit: 0.20
+    small_cap: 0.15
+    sector: 0.30
+    fx: 0.10
+    factor: 0.20
+  # リスクオフ判定: sp500の60日リターンがこの閾値を下回ったらリスクオフ
+  risk_off_ticker: VOO
+  risk_off_window: 60
+  risk_off_threshold: -0.07
+  risk_off_equity_cap: 0.40
+
+turnover:
+  max_turnover: 0.50
+
+report:
+  output_dir: outputs
+  include_correlation_matrix: true
+  top_n_display: 15
+
+data:
+  fetch_years: 3
+  min_history_days: 260

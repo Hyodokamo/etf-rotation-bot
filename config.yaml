@@ -183,3 +183,10 @@ report:
 data:
   fetch_years: 3
   min_history_days: 260
+
+ai_audit:
+  # AI監査を有効にするか（環境変数 AI_AUDIT_ENABLED でも制御可能）
+  enabled: false
+  model: claude-3-5-sonnet-latest
+  # Phase 2では常にfalse（AI提案は参考情報のみ）
+  apply_adjustment: false

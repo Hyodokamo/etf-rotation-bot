@@ -34,16 +34,28 @@ def build_slack_summary(
     risk_off: bool,
     turnover: float | None,
     report_path: str,
+    audit_result=None,
 ) -> str:
     top5 = sorted(weights.items(), key=lambda x: -x[1])[:5]
     top5_str = "\n".join(f"  {t}: {w:.1%}" for t, w in top5)
     mode = "⚠️ リスクオフ" if risk_off else "✅ リスクオン"
     to_str = f"{turnover:.1%}" if turnover is not None else "N/A（初回）"
 
-    return (
-        f"*ETF Rotation Bot — 月次レポート*\n"
-        f"モード: {mode}\n"
-        f"ターンオーバー: {to_str}\n"
-        f"Top5配分:\n{top5_str}\n"
-        f"レポート: {report_path}"
-    )
+    lines = [
+        "*ETF Rotation Bot — 月次レポート*",
+        f"モード: {mode}",
+        f"ターンオーバー: {to_str}",
+        f"Top5配分:\n{top5_str}",
+    ]
+
+    if audit_result is not None:
+        status_icon = {
+            "PASS": "✅",
+            "PASS_WITH_CAUTION": "⚠️",
+            "REVIEW_REQUIRED": "🔶",
+            "REJECT": "❌",
+        }.get(str(audit_result.status), "")
+        lines.append(f"AI監査: {status_icon} {audit_result.status} — {audit_result.summary[:80]}")
+
+    lines.append(f"レポート: {report_path}")
+    return "\n".join(lines)

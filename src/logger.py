@@ -1,3 +1,4 @@
+import io
 import logging
 import sys
 from pathlib import Path
@@ -15,7 +16,9 @@ def setup_logger(name: str = "etf_bot", log_dir: str = "outputs") -> logging.Log
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    console_handler = logging.StreamHandler(sys.stdout)
+    # Force UTF-8 on Windows where the default console encoding may be cp932
+    utf8_stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    console_handler = logging.StreamHandler(utf8_stdout)
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)

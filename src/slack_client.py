@@ -49,13 +49,11 @@ def build_slack_summary(
     ]
 
     if audit_result is not None:
-        status_icon = {
-            "PASS": "✅",
-            "PASS_WITH_CAUTION": "⚠️",
-            "REVIEW_REQUIRED": "🔶",
-            "REJECT": "❌",
-        }.get(str(audit_result.status), "")
-        lines.append(f"AI監査: {status_icon} {audit_result.status} — {audit_result.summary[:80]}")
+        status_val = audit_result.status.value
+        status_icon = {"PASS": "✅", "PASS_WITH_CAUTION": "⚠️", "REVIEW_REQUIRED": "🔶", "REJECT": "❌"}.get(
+            status_val, ""
+        )
+        lines.append(f"AI監査: {status_icon} {status_val} — {audit_result.summary[:80]}")
 
     lines.append(f"レポート: {report_path}")
     return "\n".join(lines)

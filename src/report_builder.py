@@ -1,5 +1,6 @@
 from datetime import date
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
@@ -19,6 +20,7 @@ def build_report(
     prev_weights: dict[str, float] | None,
     turnover: float | None,
     run_date: date | None = None,
+    audit_result=None,
 ) -> str:
     if run_date is None:
         run_date = date.today()
@@ -152,6 +154,55 @@ def build_report(
                 for a, b, c in pairs[:5]:
                     lines.append(f"- {a} / {b}: {c:.2f}")
                 lines.append("")
+
+    # --- AI audit section ---
+    if audit_result is not None:
+        lines.append("## AI監査結果（参考）")
+        lines.append("")
+        status_label = {
+            "PASS": "✅ PASS",
+            "PASS_WITH_CAUTION": "⚠️ PASS_WITH_CAUTION",
+            "REVIEW_REQUIRED": "🔶 REVIEW_REQUIRED",
+            "REJECT": "❌ REJECT",
+        }.get(audit_result.status, str(audit_result.status))
+        lines.append(f"**ステータス:** {status_label}")
+        lines.append("")
+        lines.append(f"**サマリー:** {audit_result.summary}")
+        lines.append("")
+        lines.append("> ⚠️ AI監査は参考情報です。最終配分は定量モデルの推奨値を使用しています。自動売買は行いません。")
+        lines.append("")
+
+        if audit_result.adjustments:
+            lines.append("### 調整提案（参考のみ・適用しない）")
+            lines.append("")
+            lines.append("| Ticker | 現在配分 | 提案配分 | 理由 |")
+            lines.append("|--------|---------|---------|------|")
+            for adj in audit_result.adjustments:
+                lines.append(
+                    f"| {adj.ticker} | {adj.current_weight:.1%} | {adj.suggested_weight:.1%} | {adj.reason} |"
+                )
+            lines.append("")
+
+        if audit_result.pre_trade_checks:
+            lines.append("### プレトレードチェック")
+            lines.append("")
+            lines.append("| チェックID | 結果 | 詳細 | 値 |")
+            lines.append("|-----------|------|------|-----|")
+            for chk in audit_result.pre_trade_checks:
+                result_icon = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}.get(chk.result, chk.result)
+                val_str = f"{chk.value:.4f}" if chk.value is not None else "—"
+                lines.append(f"| {chk.check_id} | {result_icon} {chk.result} | {chk.description} | {val_str} |")
+            lines.append("")
+
+        if audit_result.nisa_checks:
+            lines.append("### NISA適格性（参考）")
+            lines.append("")
+            lines.append("| Ticker | NISA適格 | 理由 |")
+            lines.append("|--------|---------|------|")
+            for nc in audit_result.nisa_checks:
+                flag = "✅" if nc.is_nisa_suitable else "❌"
+                lines.append(f"| {nc.ticker} | {flag} | {nc.reason} |")
+            lines.append("")
 
     # --- Warnings ---
     lines.append("## 注意事項")

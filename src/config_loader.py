@@ -71,6 +71,12 @@ class DataConfig(BaseModel):
     min_history_days: int = 260
 
 
+class AiAuditConfig(BaseModel):
+    enabled: bool = False
+    model: str = "claude-3-5-sonnet-latest"
+    apply_adjustment: bool = False
+
+
 class AppConfig(BaseModel):
     universe: UniverseConfig
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
@@ -79,6 +85,7 @@ class AppConfig(BaseModel):
     turnover: TurnoverConfig = Field(default_factory=TurnoverConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
     data: DataConfig = Field(default_factory=DataConfig)
+    ai_audit: AiAuditConfig = Field(default_factory=AiAuditConfig)
 
     def production_assets(self) -> list[AssetConfig]:
         return [a for a in self.universe.assets if a.include_stage == "production"]

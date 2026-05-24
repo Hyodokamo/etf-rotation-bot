@@ -54,6 +54,9 @@ def build_slack_summary(
             status_val, ""
         )
         lines.append(f"AI監査: {status_icon} {status_val} — {audit_result.summary[:80]}")
+        if audit_result.adjustments_invalidated:
+            lines.append("AI参考調整案：制約違反のため未採用（±5%超）")
+            lines.append("実配分への反映：なし")
 
     lines.append(f"レポート: {report_path}")
     return "\n".join(lines)

@@ -58,6 +58,10 @@ def _check_forbidden_patterns(text: str) -> list[str]:
 
 
 def _validate_result(result: LlmAuditResult, weights: dict[str, float]) -> list[str]:
+    """Check structural invariants: apply_adjustment=False, no unknown tickers, no forbidden text.
+
+    NOTE: ±5% delta checks are handled separately by _invalidate_excess_adjustments.
+    """
     errors: list[str] = []
 
     if result.apply_adjustment:
@@ -66,14 +70,33 @@ def _validate_result(result: LlmAuditResult, weights: dict[str, float]) -> list[
     for adj in result.adjustments:
         if adj.ticker not in weights:
             errors.append(f"unknown ticker in adjustments: {adj.ticker}")
-        delta = abs(adj.suggested_weight - adj.current_weight)
-        if delta > 0.05 + 1e-9:
-            errors.append(f"adjustment delta exceeds +-5% for {adj.ticker}: {delta:.1%}")
         if adj.suggested_weight < 0:
             errors.append(f"negative suggested_weight for {adj.ticker}")
 
     errors.extend(_check_forbidden_patterns(result.summary))
     return errors
+
+
+def _invalidate_excess_adjustments(result: LlmAuditResult, delta_cap: float = 0.05) -> list[str]:
+    """Mark adjustments whose delta exceeds delta_cap as invalid (valid=False).
+
+    Stores warning strings in result.validation_warnings and sets
+    result.adjustments_invalidated if any were invalidated. The audit result
+    itself is still returned — only the adjustment suggestions are flagged.
+    """
+    warnings: list[str] = []
+    for adj in result.adjustments:
+        delta = abs(adj.suggested_weight - adj.current_weight)
+        if delta > delta_cap + 1e-9:
+            adj.valid = False
+            warnings.append(
+                f"adjustment delta exceeds ±{delta_cap:.0%} for {adj.ticker}: {delta:.1%} — invalidated"
+            )
+    result.adjustments_invalidated = any(not adj.valid for adj in result.adjustments)
+    result.validation_warnings = warnings
+    if warnings:
+        logger.warning(f"AI adjustment(s) invalidated (±{delta_cap:.0%} cap): {warnings}")
+    return warnings
 
 
 def run_audit(
@@ -116,9 +139,13 @@ def run_audit(
                 return None
             continue
 
+        # Structural invariant warnings (unknown tickers, forbidden patterns)
         errors = _validate_result(result, weights)
         if errors:
-            logger.warning(f"AI audit post-validation warnings: {errors}")
+            logger.warning(f"AI audit validation warnings: {errors}")
+
+        # Mark adjustments exceeding ±5% as invalid; audit still succeeds
+        _invalidate_excess_adjustments(result)
 
         logger.info(f"AI audit complete — status={result.status.value}")
         return result

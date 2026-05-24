@@ -244,7 +244,7 @@ def test_report_contains_audit_section(cfg, weights, scores, indicators, prices,
 
     assert "AI監査結果" in report
     assert "PASS_WITH_CAUTION" in report
-    assert "調整提案" in report
+    assert "AI参考調整案" in report
     assert "プレトレードチェック" in report
     assert "NISA適格性" in report
     assert "apply_adjustment" not in report.lower() or "false" in report.lower()

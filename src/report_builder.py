@@ -173,14 +173,25 @@ def build_report(
         lines.append("")
 
         if audit_result.adjustments:
-            lines.append("### 調整提案（参考のみ・適用しない）")
+            lines.append("### AI参考調整案")
             lines.append("")
-            lines.append("| Ticker | 現在配分 | 提案配分 | 理由 |")
-            lines.append("|--------|---------|---------|------|")
-            for adj in audit_result.adjustments:
+            if audit_result.adjustments_invalidated:
                 lines.append(
-                    f"| {adj.ticker} | {adj.current_weight:.1%} | {adj.suggested_weight:.1%} | {adj.reason} |"
+                    "> ⚠️ ±5%制約を超えるAI参考調整案は無効化しました。実配分には反映しません。"
                 )
+                lines.append("")
+            lines.append("| ETF | 現在配分 | AI参考配分 | 差分 | 判定 | 理由 |")
+            lines.append("|-----|--------:|----------:|-----:|------|------|")
+            for adj in audit_result.adjustments:
+                delta = abs(adj.suggested_weight - adj.current_weight)
+                validity = "有効" if adj.valid else "❌ 無効"
+                reason_col = adj.reason if adj.valid else f"{adj.reason}（±5%制約超過: {delta:.1%}）"
+                lines.append(
+                    f"| {adj.ticker} | {adj.current_weight:.1%} | {adj.suggested_weight:.1%}"
+                    f" | {delta:.1%} | {validity} | {reason_col} |"
+                )
+            lines.append("")
+            lines.append("> AI参考調整案は実配分に反映しません。")
             lines.append("")
 
         if audit_result.pre_trade_checks:

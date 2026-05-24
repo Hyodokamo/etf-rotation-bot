@@ -5,6 +5,7 @@ import pytest
 from src.llm_auditor import (
     _check_forbidden_patterns,
     _extract_json,
+    _invalidate_excess_adjustments,
     _validate_result,
 )
 from src.schemas import AdjustmentAction, AuditStatus, LlmAuditResult
@@ -98,14 +99,27 @@ def test_validate_unknown_ticker_in_adjustment():
     assert any("UNKNOWN" in e for e in errors)
 
 
-def test_validate_delta_exceeds_5pct():
+def test_validate_delta_exceeds_5pct_not_in_validate_result():
+    """±5% check is now in _invalidate_excess_adjustments, not _validate_result."""
     result = _make_result(
         adjustments=[
             {"ticker": "VOO", "current_weight": 0.25, "suggested_weight": 0.10, "reason": "reduce"}
         ]
     )
     errors = _validate_result(result, {"VOO": 0.25})
-    assert any("delta" in e for e in errors)
+    assert errors == []  # _validate_result no longer checks delta
+
+
+def test_invalidate_excess_adjustments_detects_delta():
+    result = _make_result(
+        adjustments=[
+            {"ticker": "VOO", "current_weight": 0.25, "suggested_weight": 0.10, "reason": "reduce"}
+        ]
+    )
+    warnings = _invalidate_excess_adjustments(result)
+    assert any("VOO" in w for w in warnings)
+    assert result.adjustments[0].valid is False
+    assert result.adjustments_invalidated is True
 
 
 def test_validate_delta_within_5pct():

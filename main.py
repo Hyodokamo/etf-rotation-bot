@@ -70,11 +70,17 @@ def _resolve_ai_audit_enabled(args: argparse.Namespace, cfg_enabled: bool) -> bo
 def _save_run_log(output_dir: str, run_date: date, weights: dict, audit_result, elapsed_ok: bool) -> None:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
+    invalidated = audit_result.adjustments_invalidated if audit_result else False
+    warnings = list(audit_result.validation_warnings) if audit_result else []
     log = {
         "run_date": run_date.isoformat(),
         "final_allocation": {t: round(w, 4) for t, w in weights.items()},
         "ai_audit_status": audit_result.status.value if audit_result else None,
-        "apply_adjustment": False,
+        "ai_audit_valid": audit_result is not None,
+        "ai_adjustment_applied": False,
+        "ai_adjustment_invalidated": invalidated,
+        "ai_adjustment_invalid_reason": "adjustment delta exceeds +-5%" if invalidated else None,
+        "ai_audit_validation_warnings": warnings,
         "success": elapsed_ok,
     }
     path = out / "run_log.json"

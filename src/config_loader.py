@@ -73,6 +73,7 @@ class DataConfig(BaseModel):
 
 class AiAuditConfig(BaseModel):
     enabled: bool = False
+    provider: Literal["claude", "openai", "gemini"] = "claude"
     model: str = "claude-3-5-sonnet-latest"
     apply_adjustment: bool = False
 

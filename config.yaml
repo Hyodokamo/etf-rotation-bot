@@ -187,6 +187,10 @@ data:
 ai_audit:
   # AI監査を有効にするか（環境変数 AI_AUDIT_ENABLED でも制御可能）
   enabled: false
+  # LLMプロバイダー: claude | openai | gemini（将来対応）
+  provider: claude
+  # 使用モデル。providerに合わせて変更する
+  # claude: claude-3-5-sonnet-latest / openai: gpt-4o
   model: claude-3-5-sonnet-latest
   # Phase 2では常にfalse（AI提案は参考情報のみ）
   apply_adjustment: false

@@ -74,6 +74,65 @@ pytest tests/ -v
 |--------|------|------|
 | `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL | 任意（未設定時はSlack投稿をスキップ） |
 
+## AI監査（Phase 2）
+
+AI監査は定量モデルの推奨配分を Claude または OpenAI で審査し、参考意見を Markdown レポートと Slack に追記します。**最終配分は常に定量モデルの出力値であり、AI 提案は配分に反映されません。**
+
+### プロバイダーの切り替え
+
+#### Claude（デフォルト）
+
+```bash
+# .env
+ANTHROPIC_API_KEY=sk-ant-...
+AI_AUDIT_ENABLED=true
+AI_AUDIT_PROVIDER=claude
+AI_AUDIT_MODEL=claude-3-5-sonnet-latest
+```
+
+```yaml
+# config.yaml
+ai_audit:
+  enabled: true
+  provider: claude
+  model: claude-3-5-sonnet-latest
+```
+
+#### OpenAI
+
+```bash
+# .env
+OPENAI_API_KEY=sk-...
+AI_AUDIT_ENABLED=true
+AI_AUDIT_PROVIDER=openai
+AI_AUDIT_MODEL=gpt-4o
+```
+
+```yaml
+# config.yaml
+ai_audit:
+  enabled: true
+  provider: openai
+  model: gpt-4o
+```
+
+#### コマンドラインで上書き
+
+```bash
+# Claude で実行
+python main.py --ai-audit --ai-audit-provider claude --ai-audit-model claude-3-5-sonnet-latest
+
+# OpenAI で実行
+python main.py --ai-audit --ai-audit-provider openai --ai-audit-model gpt-4o
+
+# AI監査を無効化
+python main.py --no-ai-audit
+```
+
+#### 将来のプロバイダー拡張
+
+`src/llm/gemini_client.py` に `GeminiClient` を実装し、`config.yaml` で `provider: gemini` を指定することで追加できます。現在は `NotImplementedError` のスタブのみ存在します。
+
 ## 既知の制限事項・注意点
 
 - 日本円建てETF（1306.T等）と米ドル建てETFを同一スコアで比較しており、**通貨換算は行っていません**

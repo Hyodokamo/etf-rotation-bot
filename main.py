@@ -1,11 +1,12 @@
-"""ETF Rotation Bot — Phase 2 entry point.
+"""ETF Rotation Bot — Phase 2.1 entry point.
 
 Usage:
     python main.py [--config config.yaml] [--date YYYY-MM-DD]
-    python main.py --ai-audit              # enable AI audit override
-    python main.py --no-ai-audit           # disable AI audit override
-    python main.py --ai-audit-model MODEL  # override audit model
-    python main.py --portfolio-state PATH  # override state file path
+    python main.py --ai-audit                        # enable AI audit override
+    python main.py --no-ai-audit                     # disable AI audit override
+    python main.py --ai-audit-provider claude|openai  # override LLM provider
+    python main.py --ai-audit-model MODEL            # override audit model
+    python main.py --portfolio-state PATH            # override state file path
 
 Outputs:
     outputs/report_YYYY-MM-DD.md
@@ -30,6 +31,7 @@ from src.config_loader import load_config
 from src.data_fetcher import fetch_prices
 from src.data_quality import check_and_clean
 from src.indicators import compute_indicators
+from src.llm.factory import create_client
 from src.llm_auditor import run_audit, save_audit_result
 from src.logger import logger
 from src.portfolio_state import PortfolioState, load_state, save_state
@@ -46,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--date", default=None, help="Run date override (YYYY-MM-DD)")
     parser.add_argument("--ai-audit", action="store_true", default=None, help="Enable AI audit")
     parser.add_argument("--no-ai-audit", action="store_true", default=None, help="Disable AI audit")
+    parser.add_argument("--ai-audit-provider", default=None, help="Override LLM provider (claude|openai|gemini)")
     parser.add_argument("--ai-audit-model", default=None, help="Override AI audit model")
     parser.add_argument("--portfolio-state", default=None, help="Override portfolio state file path")
     return parser.parse_args()
@@ -70,7 +73,7 @@ def _save_run_log(output_dir: str, run_date: date, weights: dict, audit_result, 
     log = {
         "run_date": run_date.isoformat(),
         "final_allocation": {t: round(w, 4) for t, w in weights.items()},
-        "ai_audit_status": str(audit_result.status) if audit_result else None,
+        "ai_audit_status": audit_result.status.value if audit_result else None,
         "apply_adjustment": False,
         "success": elapsed_ok,
     }
@@ -138,8 +141,17 @@ def main() -> None:
     audit_output_dir = Path(cfg.report.output_dir) / run_date.strftime("%Y-%m")
 
     if ai_enabled:
-        model = args.ai_audit_model or os.environ.get("AI_AUDIT_MODEL", "").strip() or cfg.ai_audit.model
-        logger.info(f"AI audit enabled (model={model})")
+        provider = (
+            args.ai_audit_provider
+            or os.environ.get("AI_AUDIT_PROVIDER", "").strip()
+            or cfg.ai_audit.provider
+        )
+        model = (
+            args.ai_audit_model
+            or os.environ.get("AI_AUDIT_MODEL", "").strip()
+            or cfg.ai_audit.model
+        )
+        logger.info(f"AI audit enabled (provider={provider}, model={model})")
         context = build_audit_context(
             cfg=cfg,
             weights=final_weights,
@@ -150,7 +162,12 @@ def main() -> None:
             turnover=turnover,
             run_date=run_date,
         )
-        audit_result = run_audit(context=context, weights=final_weights, model=model)
+        try:
+            llm_client = create_client(provider=provider, model=model)
+            audit_result = run_audit(context=context, weights=final_weights, client=llm_client)
+        except (ValueError, NotImplementedError) as e:
+            logger.error(f"AI audit skipped: {e}")
+            audit_result = None
         if audit_result is not None:
             save_audit_result(audit_result, str(audit_output_dir))
         else:

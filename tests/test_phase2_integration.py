@@ -5,7 +5,7 @@ No real API key required.
 """
 import json
 from datetime import date
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
@@ -174,15 +174,14 @@ def test_user_prompt_embeds_context(cfg, weights, scores, indicators, risk_gate,
 
 def test_run_audit_with_mock_returns_result(weights):
     """run_audit() parses mocked LLM response and returns LlmAuditResult."""
-    with patch("src.llm_auditor.LlmClient") as MockClient:
-        instance = MockClient.return_value
-        instance.complete.return_value = MOCK_LLM_RESPONSE
+    mock_client = MagicMock()
+    mock_client.complete.return_value = MOCK_LLM_RESPONSE
 
-        result = run_audit(
-            context={"run_date": "2026-05-23", "allocation": []},
-            weights=weights,
-            model="claude-3-5-sonnet-latest",
-        )
+    result = run_audit(
+        context={"run_date": "2026-05-23", "allocation": []},
+        weights=weights,
+        client=mock_client,
+    )
 
     assert result is not None
     assert result.status == AuditStatus.PASS_WITH_CAUTION
@@ -197,15 +196,10 @@ def test_run_audit_apply_adjustment_forced_false(weights):
     response_with_true = json.loads(MOCK_LLM_RESPONSE)
     response_with_true["apply_adjustment"] = True
 
-    with patch("src.llm_auditor.LlmClient") as MockClient:
-        instance = MockClient.return_value
-        instance.complete.return_value = json.dumps(response_with_true, ensure_ascii=False)
+    mock_client = MagicMock()
+    mock_client.complete.return_value = json.dumps(response_with_true, ensure_ascii=False)
 
-        result = run_audit(
-            context={},
-            weights=weights,
-            model="claude-3-5-sonnet-latest",
-        )
+    result = run_audit(context={}, weights=weights, client=mock_client)
 
     assert result is not None
     assert result.apply_adjustment is False
@@ -213,32 +207,20 @@ def test_run_audit_apply_adjustment_forced_false(weights):
 
 def test_run_audit_returns_none_on_api_error(weights):
     """run_audit() returns None (Phase 1 fallback) when API call fails."""
-    with patch("src.llm_auditor.LlmClient") as MockClient:
-        instance = MockClient.return_value
-        instance.complete.side_effect = Exception("network error")
+    mock_client = MagicMock()
+    mock_client.complete.side_effect = Exception("network error")
 
-        result = run_audit(
-            context={},
-            weights=weights,
-            model="claude-3-5-sonnet-latest",
-            max_retries=0,
-        )
+    result = run_audit(context={}, weights=weights, client=mock_client, max_retries=0)
 
     assert result is None
 
 
 def test_run_audit_returns_none_on_bad_json(weights):
     """run_audit() returns None when LLM returns unparseable response."""
-    with patch("src.llm_auditor.LlmClient") as MockClient:
-        instance = MockClient.return_value
-        instance.complete.return_value = "申し訳ありません。JSONを生成できませんでした。"
+    mock_client = MagicMock()
+    mock_client.complete.return_value = "申し訳ありません。JSONを生成できませんでした。"
 
-        result = run_audit(
-            context={},
-            weights=weights,
-            model="claude-3-5-sonnet-latest",
-            max_retries=0,
-        )
+    result = run_audit(context={}, weights=weights, client=mock_client, max_retries=0)
 
     assert result is None
 

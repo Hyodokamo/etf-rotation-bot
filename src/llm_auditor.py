@@ -1,7 +1,7 @@
 import json
 import re
 
-from src.llm_client import LlmClient
+from src.llm.base import BaseLlmClient
 from src.logger import logger
 from src.prompt_templates import SYSTEM_PROMPT, build_user_prompt
 from src.schemas import LlmAuditResult
@@ -68,31 +68,21 @@ def _validate_result(result: LlmAuditResult, weights: dict[str, float]) -> list[
             errors.append(f"unknown ticker in adjustments: {adj.ticker}")
         delta = abs(adj.suggested_weight - adj.current_weight)
         if delta > 0.05 + 1e-9:
-            errors.append(
-                f"adjustment delta exceeds ±5% for {adj.ticker}: {delta:.1%}"
-            )
+            errors.append(f"adjustment delta exceeds +-5% for {adj.ticker}: {delta:.1%}")
         if adj.suggested_weight < 0:
             errors.append(f"negative suggested_weight for {adj.ticker}")
 
-    violations = _check_forbidden_patterns(result.summary)
-    errors.extend(violations)
-
+    errors.extend(_check_forbidden_patterns(result.summary))
     return errors
 
 
 def run_audit(
     context: dict,
     weights: dict[str, float],
-    model: str,
+    client: BaseLlmClient,
     max_retries: int = 2,
 ) -> LlmAuditResult | None:
-    """Run AI audit. Returns None on failure so caller can fall back to Phase 1 results."""
-    try:
-        client = LlmClient(model=model)
-    except ValueError:
-        logger.error("AI audit skipped — ANTHROPIC_API_KEY not set")
-        return None
-
+    """Run AI audit using the given client. Returns None on failure (Phase 1 fallback)."""
     user_prompt = build_user_prompt(context)
 
     for attempt in range(max_retries + 1):
@@ -130,7 +120,7 @@ def run_audit(
         if errors:
             logger.warning(f"AI audit post-validation warnings: {errors}")
 
-        logger.info(f"AI audit complete — status={result.status}")
+        logger.info(f"AI audit complete — status={result.status.value}")
         return result
 
     return None

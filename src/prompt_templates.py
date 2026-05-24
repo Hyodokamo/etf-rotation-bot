@@ -27,7 +27,7 @@ SYSTEM_PROMPT = """あなたはETFポートフォリオの監査専門家です�
       "check_id": "concentration_check",
       "result": "PASS",
       "description": "チェック内容",
-      "value": null
+      "value": 0.25
     }
   ],
   "nisa_checks": [
@@ -48,6 +48,7 @@ SYSTEM_PROMPT = """あなたはETFポートフォリオの監査専門家です�
 
 # 重要
 - apply_adjustmentは常にfalseにしてください（Phase 2では調整は参考情報のみ）
+- pre_trade_checksのvalueフィールドは必ず単一の数値（float）またはnullにしてください。辞書型・配列型・文字列型は不可です。
 - 投資判断の最終責任は投資家自身にあります
 - 自動売買・注文実行の提案は禁止です"""
 

@@ -103,24 +103,59 @@ def test_claude_client_complete_calls_sdk():
 
 
 # ──────────────────────────────────────────────
-# OpenAIClient.complete() — happy path
+# OpenAIClient.complete() — Responses API
 # ──────────────────────────────────────────────
 
 
-def test_openai_client_complete_calls_sdk():
+def test_openai_client_complete_calls_responses_api():
+    """OpenAIClient must use client.responses.create (Responses API)."""
     from src.llm.openai_client import OpenAIClient
 
     mock_sdk = MagicMock()
-    mock_sdk.chat.completions.create.return_value.choices = [
-        MagicMock(message=MagicMock(content='{"status":"PASS"}'))
-    ]
+    mock_sdk.responses.create.return_value.output_text = '{"status":"PASS"}'
 
     with patch("src.llm.openai_client.openai.OpenAI", return_value=mock_sdk):
-        client = OpenAIClient(model="gpt-4o", api_key="sk-test")
+        client = OpenAIClient(model="gpt-5.4-mini", api_key="sk-test")
         result = client.complete(system="sys", user="usr")
 
     assert result == '{"status":"PASS"}'
-    mock_sdk.chat.completions.create.assert_called_once()
+    mock_sdk.responses.create.assert_called_once()
+    mock_sdk.chat.completions.create.assert_not_called()
+
+
+def test_openai_responses_api_uses_max_output_tokens():
+    """Responses API must use max_output_tokens — never max_tokens or max_completion_tokens."""
+    from src.llm.openai_client import OpenAIClient
+
+    mock_sdk = MagicMock()
+    mock_sdk.responses.create.return_value.output_text = '{"status":"PASS"}'
+
+    with patch("src.llm.openai_client.openai.OpenAI", return_value=mock_sdk):
+        client = OpenAIClient(model="gpt-5.4-mini", api_key="sk-test")
+        client.complete(system="sys", user="usr", max_tokens=2048)
+
+    _, kwargs = mock_sdk.responses.create.call_args
+    assert kwargs.get("max_output_tokens") == 2048
+    assert "max_tokens" not in kwargs
+    assert "max_completion_tokens" not in kwargs
+
+
+@pytest.mark.parametrize("model", [
+    "gpt-5.4-mini", "gpt-4.1", "o1", "o3-mini", "o4-mini", "gpt-4o",
+])
+def test_openai_no_model_sends_max_tokens(model):
+    """All models must NOT use max_tokens (Responses API uses max_output_tokens)."""
+    from src.llm.openai_client import OpenAIClient
+
+    mock_sdk = MagicMock()
+    mock_sdk.responses.create.return_value.output_text = '{"status":"PASS"}'
+
+    with patch("src.llm.openai_client.openai.OpenAI", return_value=mock_sdk):
+        client = OpenAIClient(model=model, api_key="sk-test")
+        client.complete(system="sys", user="usr")
+
+    _, kwargs = mock_sdk.responses.create.call_args
+    assert "max_tokens" not in kwargs, f"max_tokens was sent for model {model!r}"
 
 
 # ──────────────────────────────────────────────

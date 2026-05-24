@@ -16,15 +16,13 @@ class OpenAIClient(BaseLlmClient):
 
     def complete(self, system: str, user: str, max_tokens: int = 4096) -> str:
         try:
-            response = self._client.chat.completions.create(
+            response = self._client.responses.create(
                 model=self.model,
-                max_tokens=max_tokens,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
+                instructions=system,
+                input=user,
+                max_output_tokens=max_tokens,
             )
-            return response.choices[0].message.content
+            return response.output_text
         except openai.AuthenticationError:
             logger.error("OpenAI authentication failed — check OPENAI_API_KEY")
             raise

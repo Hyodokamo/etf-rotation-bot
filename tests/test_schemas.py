@@ -80,3 +80,30 @@ def test_pre_trade_check_model():
     chk = PreTradeCheck(check_id="vol_check", result="WARN", description="high vol", value=0.35)
     assert chk.value == pytest.approx(0.35)
     assert chk.result == "WARN"
+
+
+def test_pre_trade_check_value_none():
+    chk = PreTradeCheck(check_id="c", result="PASS", description="d", value=None)
+    assert chk.value is None
+
+
+def test_pre_trade_check_value_dict_coerced():
+    """LLM sometimes returns a dict for value — first numeric value is extracted."""
+    chk = PreTradeCheck(
+        check_id="c", result="PASS", description="d",
+        value={"max_asset_weight": 0.50, "core_equity": 0.15},
+    )
+    assert chk.value == pytest.approx(0.50)
+
+
+def test_pre_trade_check_value_dict_no_numeric_returns_none():
+    chk = PreTradeCheck(
+        check_id="c", result="PASS", description="d",
+        value={"asset_over_limit": True, "category_over_limit": False},
+    )
+    assert chk.value is None
+
+
+def test_pre_trade_check_value_string_coerced():
+    chk = PreTradeCheck(check_id="c", result="PASS", description="d", value="0.42")
+    assert chk.value == pytest.approx(0.42)

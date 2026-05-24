@@ -184,6 +184,14 @@ data:
   fetch_years: 3
   min_history_days: 260
 
+global_settings:
+  # 最終配分の最大保有本数（eligible ETF数に応じて自動調整）
+  # eligible >= 8 → max_portfolio_assets本
+  # eligible 4〜7 → 3本
+  # eligible 1〜3 → eligible本数
+  # eligible 0    → 1本（キャッシュ）
+  max_portfolio_assets: 4
+
 ai_audit:
   # AI監査を有効にするか（環境変数 AI_AUDIT_ENABLED でも制御可能）
   enabled: false

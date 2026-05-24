@@ -25,7 +25,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src.allocation import compute_allocation
+from src.allocation import compute_allocation, resolve_max_assets, trim_to_max_assets
 from src.audit_context_builder import build_audit_context
 from src.config_loader import load_config
 from src.data_fetcher import fetch_prices
@@ -132,8 +132,15 @@ def main() -> None:
         weights = apply_turnover_limit(weights, prev_weights, cfg.turnover.max_turnover)
         turnover = compute_turnover(weights, prev_weights)
 
-    # final_allocation = quant_recommendation (always, Phase 2)
-    final_weights = weights
+    # Enforce max portfolio assets — applied as the absolute last quant step
+    n_eligible = int((scores > 0).sum())
+    max_assets = resolve_max_assets(n_eligible, cfg.global_settings.max_portfolio_assets)
+    final_weights = trim_to_max_assets(weights, max_assets)
+    logger.info(
+        f"Final allocation: {len(final_weights)} assets "
+        f"(max={max_assets}, n_eligible={n_eligible}, "
+        f"max_portfolio_assets={cfg.global_settings.max_portfolio_assets})"
+    )
 
     # --- AI Audit (Phase 2) ---
     audit_result = None

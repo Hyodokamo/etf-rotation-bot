@@ -44,7 +44,7 @@ def compute_allocation(
     weights = _normalize(weights)
     weights = _apply_min_weight(weights, risk_cfg.min_weight_per_selected)
 
-    logger.info(f"Allocation: {len(weights)} assets, top3={list(weights.items())[:3]}")
+    logger.info(f"Allocation (pre-trim): {len(weights)} assets, top3={list(weights.items())[:3]}")
     return weights
 
 
@@ -123,6 +123,31 @@ def _apply_category_cap(
             adjusted[t] += excess * (adjusted[t] / total_free)
 
     return adjusted
+
+
+def resolve_max_assets(n_eligible: int, max_portfolio_assets: int) -> int:
+    """Determine the effective asset count cap based on eligible ETF count.
+
+    eligible >= 8  → max_portfolio_assets
+    eligible 4–7   → 3
+    eligible 1–3   → n_eligible (hold all)
+    eligible == 0  → 1 (fallback cash slot)
+    """
+    if n_eligible == 0:
+        return 1
+    if n_eligible >= 8:
+        return max_portfolio_assets
+    if n_eligible >= 4:
+        return min(3, max_portfolio_assets)
+    return n_eligible
+
+
+def trim_to_max_assets(weights: dict[str, float], max_assets: int) -> dict[str, float]:
+    """Keep only the top max_assets positions by weight and renormalize."""
+    if len(weights) <= max_assets:
+        return weights
+    top = dict(sorted(weights.items(), key=lambda x: -x[1])[:max_assets])
+    return _normalize(top)
 
 
 def _normalize(weights: dict[str, float]) -> dict[str, float]:

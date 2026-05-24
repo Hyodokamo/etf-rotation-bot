@@ -78,6 +78,10 @@ class AiAuditConfig(BaseModel):
     apply_adjustment: bool = False
 
 
+class GlobalSettings(BaseModel):
+    max_portfolio_assets: int = 4
+
+
 class AppConfig(BaseModel):
     universe: UniverseConfig
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
@@ -87,6 +91,7 @@ class AppConfig(BaseModel):
     report: ReportConfig = Field(default_factory=ReportConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     ai_audit: AiAuditConfig = Field(default_factory=AiAuditConfig)
+    global_settings: GlobalSettings = Field(default_factory=GlobalSettings)
 
     def production_assets(self) -> list[AssetConfig]:
         return [a for a in self.universe.assets if a.include_stage == "production"]

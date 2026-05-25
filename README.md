@@ -42,12 +42,43 @@ python main.py
 ```bash
 python main.py --config config.yaml       # 設定ファイル指定（デフォルト: config.yaml）
 python main.py --date 2026-05-21          # 実行日を手動指定
+python main.py --no-ai-audit              # AI監査を無効化して実行
+python main.py --compare-strategy-variants  # 戦略バリアント比較レポートを生成
 ```
 
 **出力ファイル:**
 - `outputs/report_YYYY-MM-DD.md` — Markdownレポート
 - `outputs/portfolio_state.json` — 前回配分の状態（次回ターンオーバー計算用）
 - `outputs/bot.log` — 実行ログ
+- `outputs/YYYY-MM/pre_trade_gate_result.json` — Pre-Trade Gate結果
+- `outputs/YYYY-MM/run_log.json` — 実行ログ（strategy_variant含む）
+- `outputs/YYYY-MM/strategy_variant_comparison.md` — 戦略比較レポート（`--compare-strategy-variants` 時）
+
+## 戦略バリアント（Strategy Variant）
+
+デフォルト戦略は **`cash_fallback_separated`** です。
+
+| バリアント | 説明 |
+|-----------|------|
+| `cash_fallback_separated` | **デフォルト**。SGOV・UUPをモメンタムランキングから除外し、通常ETF（VOO・VTV・BND・QQQMなど）で配分を構成。Risk-ON時の防御資産比率が低下し、Pre-Trade Gate PASS率が改善する。 |
+| `baseline_current` | 比較用。全ETFをランキング対象とする従来挙動。SGOV 50%超・UUP採用などが発生しやすく、Pre-Trade Gate FAILになるケースが多い。 |
+
+### バリアントの変更方法
+
+`config.yaml` の `strategy_variant.name` を変更します:
+
+```yaml
+strategy_variant:
+  name: "cash_fallback_separated"  # または "baseline_current"
+```
+
+### 戦略比較レポートの生成
+
+```bash
+python main.py --compare-strategy-variants --no-ai-audit
+```
+
+`outputs/YYYY-MM/strategy_variant_comparison.md` に両バリアントの並列比較と簡易バックテストが出力されます。
 
 ## テスト方法
 

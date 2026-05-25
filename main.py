@@ -28,7 +28,9 @@ from dotenv import load_dotenv
 
 from src.ai_audit_evaluation import build_evaluation_markdown, build_quality_checks, save_evaluation
 from src.allocation import compute_allocation, resolve_max_assets, trim_to_max_assets
+from src.asset_role import filter_ranking_scores
 from src.audit_context_builder import build_audit_context
+from src.backtest import build_backtest_markdown, compare_backtest
 from src.config_loader import load_config
 from src.data_fetcher import fetch_prices
 from src.data_quality import check_and_clean
@@ -43,6 +45,7 @@ from src.risk_gate import apply_risk_gate, evaluate_risk_gate
 from src.risk_mode_check import check_risk_mode_consistency
 from src.scoring import compute_scores
 from src.slack_client import build_slack_summary, post_to_slack
+from src.strategy_runner import compare_variants, save_comparison_report
 from src.turnover import apply_turnover_limit, compute_turnover
 
 
@@ -55,6 +58,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ai-audit-provider", default=None, help="Override LLM provider (claude|openai|gemini)")
     parser.add_argument("--ai-audit-model", default=None, help="Override AI audit model")
     parser.add_argument("--portfolio-state", default=None, help="Override portfolio state file path")
+    parser.add_argument(
+        "--compare-strategy-variants",
+        action="store_true",
+        default=False,
+        help="Compare allocation across strategy variants and generate comparison report",
+    )
+    parser.add_argument(
+        "--backtest-months",
+        type=int,
+        default=12,
+        help="Number of months for simplified backtest (default: 12)",
+    )
     return parser.parse_args()
 
 
@@ -82,6 +97,7 @@ def _save_run_log(
     evaluation_path: str | None = None,
     pre_trade_gate=None,
     pre_trade_gate_file: str | None = None,
+    strategy_variant: str | None = None,
 ) -> None:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -89,6 +105,7 @@ def _save_run_log(
     warnings = list(audit_result.validation_warnings) if audit_result else []
     log: dict = {
         "run_date": run_date.isoformat(),
+        "strategy_variant": strategy_variant,
         "final_allocation": {t: round(w, 4) for t, w in weights.items()},
         "ai_audit_status": audit_result.status.value if audit_result else None,
         "ai_audit_valid": audit_result is not None,
@@ -146,9 +163,56 @@ def main() -> None:
     scores = compute_scores(indicators, cfg.scoring)
     risk_gate = evaluate_risk_gate(prices, cfg.risk)
 
+    # Phase 2.8: Strategy variant comparison mode
+    if args.compare_strategy_variants:
+        state_path = Path(args.portfolio_state) if args.portfolio_state else None
+        prev_state = load_state(state_path) if state_path else load_state()
+        prev_weights_cmp = prev_state.weights if prev_state else None
+        audit_output_dir_cmp = Path(cfg.report.output_dir) / run_date.strftime("%Y-%m")
+        audit_output_dir_cmp.mkdir(parents=True, exist_ok=True)
+
+        logger.info("=== Strategy Variant Comparison Mode ===")
+        cmp_result = compare_variants(
+            prices=prices,
+            cfg=cfg,
+            ticker_to_category=ticker_to_category,
+            prev_weights=prev_weights_cmp,
+            run_date=run_date,
+        )
+        md_path, json_path = save_comparison_report(cmp_result, str(audit_output_dir_cmp), run_date)
+
+        # Append backtest results to comparison markdown
+        logger.info(f"Running simplified backtest ({args.backtest_months} months)...")
+        bt_results = compare_backtest(prices, cfg, ticker_to_category, n_months=args.backtest_months)
+        bt_md = build_backtest_markdown(bt_results)
+        with open(md_path, "a", encoding="utf-8") as f:
+            f.write("\n" + bt_md)
+
+        print(f"\nComparison report: {md_path}")
+        print(f"Comparison JSON:   {json_path}")
+        print("\nVariant summary:")
+        for v in cmp_result.variants:
+            print(f"  [{v.variant_name}] gate={v.pre_trade_gate.overall_status} "
+                  f"defensive={v.defensive_weight:.1%} "
+                  f"tickers={list(v.weights.keys())}")
+        if bt_results:
+            print("\nBacktest summary:")
+            for bt in bt_results:
+                print(f"  [{bt.variant_name}] annRet={bt.annual_return:.1%} "
+                      f"DD={bt.max_drawdown:.1%} SGOV={bt.sgov_adoption_rate:.0%} "
+                      f"gate_fails={bt.pre_trade_gate_fail_count}/{bt.n_months}")
+        logger.info("=== Comparison Mode completed ===")
+        return
+
+    # Phase 2.7: Apply strategy variant filter to ranking scores
+    variant_name = cfg.strategy_variant.name
+    ranking_scores, excluded_from_ranking = filter_ranking_scores(scores, cfg, variant_name)
+    if excluded_from_ranking:
+        logger.info(f"Strategy variant [{variant_name}]: excluded from ranking: {excluded_from_ranking}")
+
     raw_weights = compute_allocation(
-        scores=scores,
-        indicators=indicators,
+        scores=ranking_scores,
+        indicators=indicators.loc[indicators.index.intersection(ranking_scores.index)],
         ticker_to_category=ticker_to_category,
         alloc_cfg=cfg.allocation,
         risk_cfg=cfg.risk,
@@ -169,11 +233,15 @@ def main() -> None:
         logger.info(
             f"Turnover mode: {cfg.turnover.mode_label}, limit: {effective_limit:.0%}"
         )
-        weights = apply_turnover_limit(weights, prev_weights, effective_limit)
+        # Zero out excluded tickers in prev_weights so they cannot re-enter via blending.
+        # Excluded assets should be treated as already-at-zero for turnover smoothing.
+        excluded_set = set(excluded_from_ranking)
+        prev_weights_for_limit = {t: w for t, w in prev_weights.items() if t not in excluded_set}
+        weights = apply_turnover_limit(weights, prev_weights_for_limit, effective_limit)
         turnover = compute_turnover(weights, prev_weights)
 
     # Enforce max portfolio assets — applied as the absolute last quant step
-    n_eligible = int((scores > 0).sum())
+    n_eligible = int((ranking_scores > 0).sum())
     max_assets = resolve_max_assets(n_eligible, cfg.global_settings.max_portfolio_assets)
     final_weights = trim_to_max_assets(weights, max_assets)
     logger.info(
@@ -283,6 +351,7 @@ def main() -> None:
         proposed_turnover=proposed_turnover,
         risk_mode_check=risk_mode_check_result,
         pre_trade_gate=pre_trade_gate_result,
+        strategy_variant=variant_name,
     )
 
     report_path = save_report(report_text, cfg.report.output_dir, run_date=run_date)
@@ -300,6 +369,7 @@ def main() -> None:
         turnover_cfg=cfg.turnover,
         risk_mode_check=risk_mode_check_result,
         pre_trade_gate=pre_trade_gate_result,
+        strategy_variant=variant_name,
     )
     post_to_slack(slack_msg)
 
@@ -314,6 +384,7 @@ def main() -> None:
         evaluation_path=evaluation_path,
         pre_trade_gate=pre_trade_gate_result,
         pre_trade_gate_file=pre_trade_gate_file,
+        strategy_variant=variant_name,
     )
 
     logger.info("=== ETF Rotation Bot completed successfully ===")

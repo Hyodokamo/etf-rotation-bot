@@ -11,6 +11,9 @@ class AssetConfig(BaseModel):
     display_name: str
     category: str
     include_stage: Literal["production", "watch"]
+    role: str = "standard"
+    include_in_momentum_ranking: bool = True
+    include_in_fallback: bool = False
 
 
 class UniverseConfig(BaseModel):
@@ -111,6 +114,14 @@ class PreTradeGateConfig(BaseModel):
     category_limits: dict[str, float] = Field(default_factory=dict)  # empty → use risk.max_category_weights
 
 
+class StrategyVariantConfig(BaseModel):
+    name: str = "baseline_current"  # baseline_current | cash_fallback_separated
+    exclude_cash_like_from_ranking: bool = False
+    exclude_fx_from_ranking: bool = False
+    volatility_floor_enabled: bool = False
+    volatility_floor: float = 0.05
+
+
 class AppConfig(BaseModel):
     universe: UniverseConfig
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
@@ -119,6 +130,7 @@ class AppConfig(BaseModel):
     turnover: TurnoverConfig = Field(default_factory=TurnoverConfig)
     risk_mode_checks: RiskModeCheckConfig = Field(default_factory=RiskModeCheckConfig)
     pre_trade_gate: PreTradeGateConfig = Field(default_factory=PreTradeGateConfig)
+    strategy_variant: StrategyVariantConfig = Field(default_factory=StrategyVariantConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     ai_audit: AiAuditConfig = Field(default_factory=AiAuditConfig)

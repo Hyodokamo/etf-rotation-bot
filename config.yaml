@@ -50,6 +50,9 @@ universe:
       display_name: 米国超短期国債
       category: cash_like
       include_stage: production
+      role: cash_fallback
+      include_in_momentum_ranking: false
+      include_in_fallback: true
     - asset_id: gold_usd
       ticker: GLDM
       display_name: ゴールド
@@ -95,6 +98,8 @@ universe:
       display_name: 米ドル
       category: fx
       include_stage: production
+      role: fx_defensive
+      include_in_momentum_ranking: false
     - asset_id: japan_bond
       ticker: "2561.T"
       display_name: 日本国債
@@ -120,6 +125,7 @@ universe:
       display_name: 米国総合債券
       category: bond
       include_stage: production
+      role: bond_defensive
     - asset_id: commodities
       ticker: DBC
       display_name: コモディティ総合
@@ -201,6 +207,15 @@ risk_mode_checks:
     - cash_like
     - commodity
     - fx
+
+strategy_variant:
+  # baseline_current: use all tickers in ranking (existing behavior)
+  # cash_fallback_separated: exclude include_in_momentum_ranking=false assets from ranking
+  name: "cash_fallback_separated"
+  exclude_cash_like_from_ranking: false
+  exclude_fx_from_ranking: false
+  volatility_floor_enabled: false
+  volatility_floor: 0.05
 
 pre_trade_gate:
   enabled: true

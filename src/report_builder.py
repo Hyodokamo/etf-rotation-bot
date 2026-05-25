@@ -24,6 +24,7 @@ def build_report(
     proposed_turnover: float | None = None,
     risk_mode_check=None,
     pre_trade_gate=None,
+    strategy_variant: str | None = None,
 ) -> str:
     if run_date is None:
         run_date = date.today()
@@ -33,6 +34,8 @@ def build_report(
 
     lines.append(f"# ETF Rotation Bot — Monthly Report")
     lines.append(f"**実行日:** {run_date.isoformat()}")
+    variant_label = strategy_variant or cfg.strategy_variant.name
+    lines.append(f"**戦略バリアント:** `{variant_label}`")
     lines.append("")
 
     if risk_gate.risk_off:

@@ -39,6 +39,7 @@ def build_slack_summary(
     turnover_cfg=None,
     risk_mode_check=None,
     pre_trade_gate=None,
+    strategy_variant: str | None = None,
 ) -> str:
     top5 = sorted(weights.items(), key=lambda x: -x[1])[:5]
     top5_str = "\n".join(f"  {t}: {w:.1%}" for t, w in top5)
@@ -57,10 +58,12 @@ def build_slack_summary(
 
     lines = [
         "*ETF Rotation Bot — 月次レポート*",
+        f"戦略: `{strategy_variant}`" if strategy_variant else None,
         f"モード: {mode}",
         f"ターンオーバー: {to_str}",
         f"Top5配分:\n{top5_str}",
     ]
+    lines = [l for l in lines if l is not None]
 
     if audit_result is not None:
         status_val = audit_result.status.value

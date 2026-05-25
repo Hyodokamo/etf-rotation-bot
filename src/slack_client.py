@@ -35,11 +35,24 @@ def build_slack_summary(
     turnover: float | None,
     report_path: str,
     audit_result=None,
+    proposed_turnover: float | None = None,
+    turnover_cfg=None,
+    risk_mode_check=None,
 ) -> str:
     top5 = sorted(weights.items(), key=lambda x: -x[1])[:5]
     top5_str = "\n".join(f"  {t}: {w:.1%}" for t, w in top5)
     mode = "⚠️ リスクオフ" if risk_off else "✅ リスクオン"
-    to_str = f"{turnover:.1%}" if turnover is not None else "N/A（初回）"
+
+    # Turnover summary with mode info (Phase 2.3)
+    if turnover is not None:
+        if turnover_cfg is not None and turnover_cfg.migration_mode:
+            to_str = f"{turnover:.1%}（移行運用モード、通常上限{turnover_cfg.normal_limit:.0%}）"
+        elif turnover_cfg is not None:
+            to_str = f"{turnover:.1%}（通常運用、上限{turnover_cfg.effective_limit:.0%}）"
+        else:
+            to_str = f"{turnover:.1%}"
+    else:
+        to_str = "N/A（初回）"
 
     lines = [
         "*ETF Rotation Bot — 月次レポート*",
@@ -57,6 +70,14 @@ def build_slack_summary(
         if audit_result.adjustments_invalidated:
             lines.append("AI参考調整案：制約違反のため未採用（±5%超）")
             lines.append("実配分への反映：なし")
+
+    # Risk-ON defensive check (Phase 2.4)
+    if risk_mode_check is not None and risk_mode_check.enabled and risk_mode_check.status != "PASS":
+        dw = risk_mode_check.defensive_weight
+        if risk_mode_check.status == "REVIEW_REQUIRED":
+            lines.append(f"防御資産比率：{dw:.1%}（Risk-ONだが高め、要確認）")
+        else:
+            lines.append(f"防御資産比率：{dw:.1%}（Risk-ONだがやや高め）")
 
     lines.append(f"レポート: {report_path}")
     return "\n".join(lines)

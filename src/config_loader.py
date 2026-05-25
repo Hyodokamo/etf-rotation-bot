@@ -57,7 +57,30 @@ class RiskConfig(BaseModel):
 
 
 class TurnoverConfig(BaseModel):
-    max_turnover: float = 0.50
+    normal_limit: float = 0.20
+    migration_limit: float = 0.50
+    migration_mode: bool = False
+    max_turnover: float | None = None  # deprecated; kept for backward compat
+
+    @property
+    def effective_limit(self) -> float:
+        """Return the turnover limit to enforce: legacy max_turnover > migration > normal."""
+        if self.max_turnover is not None:
+            return self.max_turnover
+        return self.migration_limit if self.migration_mode else self.normal_limit
+
+    @property
+    def mode_label(self) -> str:
+        return "移行運用" if self.migration_mode else "通常運用"
+
+
+class RiskModeCheckConfig(BaseModel):
+    enabled: bool = True
+    risk_on_defensive_warning_threshold: float = 0.60
+    risk_on_defensive_review_threshold: float = 0.75
+    defensive_categories: list[str] = Field(
+        default_factory=lambda: ["bond", "cash_like", "commodity", "fx"]
+    )
 
 
 class ReportConfig(BaseModel):
@@ -88,6 +111,7 @@ class AppConfig(BaseModel):
     allocation: AllocationConfig = Field(default_factory=AllocationConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     turnover: TurnoverConfig = Field(default_factory=TurnoverConfig)
+    risk_mode_checks: RiskModeCheckConfig = Field(default_factory=RiskModeCheckConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     ai_audit: AiAuditConfig = Field(default_factory=AiAuditConfig)

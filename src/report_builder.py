@@ -21,6 +21,8 @@ def build_report(
     turnover: float | None,
     run_date: date | None = None,
     audit_result=None,
+    proposed_turnover: float | None = None,
+    risk_mode_check=None,
 ) -> str:
     if run_date is None:
         run_date = date.today()
@@ -91,6 +93,40 @@ def build_report(
 
     lines.append("")
 
+    # --- Turnover constraint summary (Phase 2.3) ---
+    if prev_weights is not None and turnover is not None:
+        to_cfg = cfg.turnover
+        eff_limit = to_cfg.effective_limit
+        mode_label = to_cfg.mode_label
+        was_limited = proposed_turnover is not None and proposed_turnover > eff_limit + 1e-9
+
+        if was_limited:
+            to_status = "⚠️ PASS_WITH_CAUTION"
+        else:
+            to_status = "✅ PASS"
+
+        lines.append("## ターンオーバー制約")
+        lines.append("")
+
+        if to_cfg.migration_mode:
+            lines.append(f"- モード：**{mode_label}**（通常上限：{to_cfg.normal_limit:.1%}、移行上限：{to_cfg.migration_limit:.1%}）")
+        else:
+            lines.append(f"- モード：**{mode_label}**")
+            lines.append(f"- 上限：**{eff_limit:.1%}**")
+
+        if proposed_turnover is not None:
+            lines.append(f"- 推定ターンオーバー（制限前）：**{proposed_turnover:.1%}**")
+        lines.append(f"- 実績ターンオーバー（制限後）：**{turnover:.1%}**")
+        lines.append(f"- 判定：{to_status}")
+
+        if to_cfg.migration_mode:
+            lines.append("")
+            lines.append(
+                "> 注意：移行運用モードは配分ルール変更直後の一時的な設定です。"
+                f"通常運用では {to_cfg.normal_limit:.0%} 上限に戻すことを推奨します。"
+            )
+        lines.append("")
+
     # --- Turnover analysis ---
     if prev_weights is not None and turnover is not None:
         lines.append("## ターンオーバー分析")
@@ -130,6 +166,26 @@ def build_report(
     lines.append(f"- 債券合計: **{bond_weight:.1%}**")
     lines.append(f"- キャッシュ系合計: **{cash_weight:.1%}**")
     lines.append("")
+
+    # --- Risk-ON defensive weight check (Phase 2.4) ---
+    if risk_mode_check is not None and risk_mode_check.enabled:
+        status_icon = {
+            "PASS": "✅", "PASS_WITH_CAUTION": "⚠️",
+            "REVIEW_REQUIRED": "🔶", "N/A": "—",
+        }.get(risk_mode_check.status, risk_mode_check.status)
+
+        lines.append("## Risk-ON 防御資産比率チェック")
+        lines.append("")
+        lines.append(f"- Riskモード：**{risk_mode_check.risk_mode}**")
+        lines.append(f"- 防御資産比率：**{risk_mode_check.defensive_weight:.1%}**")
+        lines.append(f"- 判定：{status_icon} {risk_mode_check.status}")
+        lines.append("")
+
+        if risk_mode_check.status != "PASS":
+            lines.append(f"> {risk_mode_check.message}")
+            if risk_mode_check.status == "REVIEW_REQUIRED":
+                lines.append("> score / volatility 配分により低ボラ資産へ偏っている可能性があります。手動確認してください。")
+            lines.append("")
 
     # --- Correlation matrix ---
     if cfg.report.include_correlation_matrix:

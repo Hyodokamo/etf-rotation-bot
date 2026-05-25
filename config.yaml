@@ -173,7 +173,12 @@ risk:
   risk_off_equity_cap: 0.40
 
 turnover:
-  max_turnover: 0.50
+  # 通常運用時のターンオーバー上限
+  normal_limit: 0.20
+  # 移行運用時のターンオーバー上限（配分ルール変更直後などに使用）
+  migration_limit: 0.50
+  # true にすると migration_limit が適用される（通常は false）
+  migration_mode: false
 
 report:
   output_dir: outputs
@@ -183,6 +188,19 @@ report:
 data:
   fetch_years: 3
   min_history_days: 260
+
+risk_mode_checks:
+  enabled: true
+  # Risk-ON時に防御資産比率がこの値を超えると PASS_WITH_CAUTION
+  risk_on_defensive_warning_threshold: 0.60
+  # Risk-ON時に防御資産比率がこの値を超えると REVIEW_REQUIRED
+  risk_on_defensive_review_threshold: 0.75
+  # 防御資産と判定するカテゴリ
+  defensive_categories:
+    - bond
+    - cash_like
+    - commodity
+    - fx
 
 global_settings:
   # 最終配分の最大保有本数（eligible ETF数に応じて自動調整）

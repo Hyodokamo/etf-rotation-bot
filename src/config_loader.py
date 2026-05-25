@@ -105,6 +105,12 @@ class GlobalSettings(BaseModel):
     max_portfolio_assets: int = 4
 
 
+class PreTradeGateConfig(BaseModel):
+    enabled: bool = True
+    single_asset_limit: float | None = None  # None → use risk.max_weight_per_asset
+    category_limits: dict[str, float] = Field(default_factory=dict)  # empty → use risk.max_category_weights
+
+
 class AppConfig(BaseModel):
     universe: UniverseConfig
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
@@ -112,6 +118,7 @@ class AppConfig(BaseModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     turnover: TurnoverConfig = Field(default_factory=TurnoverConfig)
     risk_mode_checks: RiskModeCheckConfig = Field(default_factory=RiskModeCheckConfig)
+    pre_trade_gate: PreTradeGateConfig = Field(default_factory=PreTradeGateConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     ai_audit: AiAuditConfig = Field(default_factory=AiAuditConfig)

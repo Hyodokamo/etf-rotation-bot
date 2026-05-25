@@ -202,6 +202,18 @@ risk_mode_checks:
     - commodity
     - fx
 
+pre_trade_gate:
+  enabled: true
+  # 単一資産の上限（未設定時は risk.max_weight_per_asset を使用）
+  single_asset_limit: 0.45
+  # カテゴリ別上限（未設定時は risk.max_category_weights を使用）
+  category_limits:
+    cash_like: 0.40
+    fx: 0.10
+    bond: 0.40
+    core_equity: 0.60
+    commodity: 0.30
+
 global_settings:
   # 最終配分の最大保有本数（eligible ETF数に応じて自動調整）
   # eligible >= 8 → max_portfolio_assets本

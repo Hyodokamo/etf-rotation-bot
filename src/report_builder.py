@@ -23,6 +23,7 @@ def build_report(
     audit_result=None,
     proposed_turnover: float | None = None,
     risk_mode_check=None,
+    pre_trade_gate=None,
 ) -> str:
     if run_date is None:
         run_date = date.today()
@@ -211,6 +212,37 @@ def build_report(
                     lines.append(f"- {a} / {b}: {c:.2f}")
                 lines.append("")
 
+    # --- Pre-Trade Gate section (Phase 2.6) ---
+    if pre_trade_gate is not None and pre_trade_gate.enabled:
+        status_icon = {
+            "PASS": "✅", "FAIL": "❌", "PASS_WITH_CAUTION": "⚠️", "REVIEW_REQUIRED": "🔶",
+        }.get(pre_trade_gate.overall_status, pre_trade_gate.overall_status)
+
+        lines.append("## Pre-Trade Gate（定量制約チェック）")
+        lines.append("")
+        lines.append(f"- 総合判定：{status_icon} **{pre_trade_gate.overall_status}**")
+        if pre_trade_gate.overall_status not in ("PASS", "N/A"):
+            lines.append("")
+            lines.append("> ⚠️ 手動確認必須。自動売買は行いません。")
+        lines.append("")
+
+        display_checks = [c for c in pre_trade_gate.checks if c.severity != "INFO"]
+        if display_checks:
+            lines.append("| Check | Status | Severity | 内容 | 値 | 上限 |")
+            lines.append("|---|---|---|---|---:|---:|")
+            for chk in display_checks:
+                chk_icon = {
+                    "PASS": "✅", "FAIL": "❌", "PASS_WITH_CAUTION": "⚠️",
+                    "REVIEW_REQUIRED": "🔶", "N/A": "—",
+                }.get(chk.status, chk.status)
+                val_str = f"{chk.value:.1%}" if chk.value is not None else "—"
+                limit_str = f"{chk.limit:.1%}" if chk.limit is not None else "—"
+                lines.append(
+                    f"| {chk.check_id} | {chk_icon} {chk.status} | {chk.severity}"
+                    f" | {chk.message} | {val_str} | {limit_str} |"
+                )
+            lines.append("")
+
     # --- AI audit section ---
     if audit_result is not None:
         lines.append("## AI監査結果（参考）")
@@ -251,7 +283,7 @@ def build_report(
             lines.append("")
 
         if audit_result.pre_trade_checks:
-            lines.append("### プレトレードチェック")
+            lines.append("### AI補足チェック")
             lines.append("")
             lines.append("| チェックID | 結果 | 詳細 | 値 |")
             lines.append("|-----------|------|------|-----|")

@@ -37,6 +37,7 @@ from src.llm.factory import create_client
 from src.llm_auditor import run_audit, save_audit_result
 from src.logger import logger
 from src.portfolio_state import PortfolioState, load_state, save_state
+from src.pre_trade_gate import run_pre_trade_gate, save_pre_trade_gate_result
 from src.report_builder import build_report, save_report
 from src.risk_gate import apply_risk_gate, evaluate_risk_gate
 from src.risk_mode_check import check_risk_mode_consistency
@@ -79,6 +80,8 @@ def _save_run_log(
     turnover_info: dict | None = None,
     quality_checks: dict | None = None,
     evaluation_path: str | None = None,
+    pre_trade_gate=None,
+    pre_trade_gate_file: str | None = None,
 ) -> None:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -101,6 +104,14 @@ def _save_run_log(
         log["ai_audit_quality_checks"] = quality_checks
     if evaluation_path:
         log["ai_audit_evaluation_file"] = evaluation_path
+    if pre_trade_gate is not None:
+        log["pre_trade_gate_status"] = pre_trade_gate.overall_status
+        log["pre_trade_gate_failures"] = [
+            c.check_id for c in pre_trade_gate.checks
+            if c.status in ("FAIL", "REVIEW_REQUIRED") and c.severity != "INFO"
+        ]
+    if pre_trade_gate_file:
+        log["pre_trade_gate_file"] = pre_trade_gate_file
     path = out / "run_log.json"
     path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info(f"Run log saved to {path}")
@@ -179,6 +190,19 @@ def main() -> None:
         cfg=cfg.risk_mode_checks,
     )
 
+    audit_output_dir = Path(cfg.report.output_dir) / run_date.strftime("%Y-%m")
+
+    # Phase 2.6: Deterministic pre-trade constraint gate
+    pre_trade_gate_result = run_pre_trade_gate(
+        weights=final_weights,
+        ticker_to_category=ticker_to_category,
+        cfg=cfg,
+        turnover=turnover,
+        risk_mode_check=risk_mode_check_result,
+    )
+    pre_trade_gate_file = save_pre_trade_gate_result(pre_trade_gate_result, str(audit_output_dir))
+    logger.info(f"Pre-trade gate: {pre_trade_gate_result.overall_status}")
+
     # Turnover info for run_log
     turnover_info = {
         "turnover_mode": cfg.turnover.mode_label,
@@ -192,7 +216,6 @@ def main() -> None:
     # --- AI Audit (Phase 2) ---
     audit_result = None
     ai_enabled = _resolve_ai_audit_enabled(args, cfg.ai_audit.enabled)
-    audit_output_dir = Path(cfg.report.output_dir) / run_date.strftime("%Y-%m")
     provider = cfg.ai_audit.provider
     model = cfg.ai_audit.model
 
@@ -218,6 +241,7 @@ def main() -> None:
             turnover=turnover,
             run_date=run_date,
             risk_mode_check=risk_mode_check_result,
+            pre_trade_gate=pre_trade_gate_result,
         )
         try:
             llm_client = create_client(provider=provider, model=model)
@@ -258,6 +282,7 @@ def main() -> None:
         audit_result=audit_result,
         proposed_turnover=proposed_turnover,
         risk_mode_check=risk_mode_check_result,
+        pre_trade_gate=pre_trade_gate_result,
     )
 
     report_path = save_report(report_text, cfg.report.output_dir, run_date=run_date)
@@ -274,6 +299,7 @@ def main() -> None:
         proposed_turnover=proposed_turnover,
         turnover_cfg=cfg.turnover,
         risk_mode_check=risk_mode_check_result,
+        pre_trade_gate=pre_trade_gate_result,
     )
     post_to_slack(slack_msg)
 
@@ -286,6 +312,8 @@ def main() -> None:
         turnover_info=turnover_info,
         quality_checks=quality_checks,
         evaluation_path=evaluation_path,
+        pre_trade_gate=pre_trade_gate_result,
+        pre_trade_gate_file=pre_trade_gate_file,
     )
 
     logger.info("=== ETF Rotation Bot completed successfully ===")

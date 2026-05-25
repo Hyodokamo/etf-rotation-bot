@@ -38,6 +38,7 @@ def build_slack_summary(
     proposed_turnover: float | None = None,
     turnover_cfg=None,
     risk_mode_check=None,
+    pre_trade_gate=None,
 ) -> str:
     top5 = sorted(weights.items(), key=lambda x: -x[1])[:5]
     top5_str = "\n".join(f"  {t}: {w:.1%}" for t, w in top5)
@@ -71,8 +72,22 @@ def build_slack_summary(
             lines.append("AI参考調整案：制約違反のため未採用（±5%超）")
             lines.append("実配分への反映：なし")
 
-    # Risk-ON defensive check (Phase 2.4)
-    if risk_mode_check is not None and risk_mode_check.enabled and risk_mode_check.status != "PASS":
+    # Pre-Trade Gate summary (Phase 2.6)
+    if pre_trade_gate is not None and pre_trade_gate.enabled:
+        gate_icon = {
+            "PASS": "✅", "FAIL": "❌", "PASS_WITH_CAUTION": "⚠️", "REVIEW_REQUIRED": "🔶",
+        }.get(pre_trade_gate.overall_status, "")
+        lines.append(f"Pre-Trade Gate: {gate_icon} {pre_trade_gate.overall_status}")
+        problem_checks = [
+            c for c in pre_trade_gate.checks
+            if c.status in ("FAIL", "REVIEW_REQUIRED", "PASS_WITH_CAUTION")
+            and c.severity != "INFO"
+        ]
+        for chk in problem_checks[:3]:
+            lines.append(f"- {chk.message}")
+
+    # Risk-ON defensive check (Phase 2.4) — shown only when no pre_trade_gate
+    elif risk_mode_check is not None and risk_mode_check.enabled and risk_mode_check.status != "PASS":
         dw = risk_mode_check.defensive_weight
         if risk_mode_check.status == "REVIEW_REQUIRED":
             lines.append(f"防御資産比率：{dw:.1%}（Risk-ONだが高め、要確認）")

@@ -16,6 +16,7 @@ def build_audit_context(
     turnover: float | None,
     run_date: date,
     risk_mode_check=None,
+    pre_trade_gate=None,
 ) -> dict:
     asset_map = {a.ticker: a for a in cfg.universe.assets}
     cat_map = {a.ticker: a.category for a in cfg.universe.assets}
@@ -70,5 +71,8 @@ def build_audit_context(
             "status": risk_mode_check.status,
             "message": risk_mode_check.message,
         }
+
+    if pre_trade_gate is not None and pre_trade_gate.enabled:
+        context["pre_trade_gate"] = pre_trade_gate.to_dict()
 
     return context

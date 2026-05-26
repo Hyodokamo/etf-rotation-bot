@@ -247,3 +247,19 @@ ai_audit:
   model: claude-3-5-sonnet-latest
   # Phase 2では常にfalse（AI提案は参考情報のみ）
   apply_adjustment: false
+
+slack_review_decision:
+  # Phase 3: 月次レビュー判断ログ機能
+  enabled: true
+  mode: review_decision
+  # Slack Interactivity（ボタン押下受信）を有効にするか
+  # 現在は false（CLIによる記録のみ対応）
+  interactive_enabled: false
+  # MANUAL_OVERRIDE（手動判断で採用）を許可するか
+  allow_manual_override: true
+  # MANUAL_OVERRIDE 時にコメント必須にするか
+  require_comment_on_manual_override: true
+  # Pre-Trade Gate FAIL 時にコメント必須にするか
+  require_comment_on_fail_gate: true
+  # 判断ログ保存先ルートディレクトリ
+  decision_log_dir: outputs

@@ -164,6 +164,75 @@ python main.py --no-ai-audit
 
 `src/llm/gemini_client.py` に `GeminiClient` を実装し、`config.yaml` で `provider: gemini` を指定することで追加できます。現在は `NotImplementedError` のスタブのみ存在します。
 
+## Phase 3: 月次レビュー判断ログ
+
+Phase 3は **売買承認機能ではありません**。月次レポートを見た人間が、レビュー結果を記録するための機能です。
+
+### 目的
+
+- 定量モデルの推奨配分と各種チェック結果を人間がレビューした記録を残す
+- 「見送り」「再レビュー」「手動判断で採用」などの判断を JSON/Markdown で保存する
+- 自動売買・注文数量計算・楽天証券連携は行わない
+
+### 判断種別
+
+| 判断 | 意味 |
+|------|------|
+| `REVIEW_CONFIRMED` | レポートを確認し、判断ログだけ残す |
+| `SKIP_THIS_MONTH` | 今月は売買・入替を見送る |
+| `REQUEST_RERUN` | 条件や設定を見直して再実行する |
+| `MANUAL_OVERRIDE` | 警告を理解したうえで人間判断として採用する（コメント必須） |
+
+### CLIで判断を記録する方法
+
+```bash
+# 今月は見送り
+python main.py --record-decision SKIP_THIS_MONTH --decision-comment "Pre-Trade GateがFAILのため今月は見送り"
+
+# 再レビュー
+python main.py --record-decision REQUEST_RERUN --decision-comment "防御資産比率が高いため再設定"
+
+# 手動判断で採用（コメント必須）
+python main.py --record-decision MANUAL_OVERRIDE --decision-comment "警告を理解したうえで採用"
+
+# 実行日指定（デフォルトは当日）
+python main.py --record-decision SKIP_THIS_MONTH --decision-comment "..." --date 2026-05-26
+```
+
+`--record-decision` 実行時は価格取得・AI監査を再実行しません。直近の `run_log.json` を読み込んで判断ログを作成します。
+
+### 判断ログの出力先
+
+```
+outputs/YYYY-MM/decision_log.json   # JSON形式の判断記録
+outputs/YYYY-MM/decision_log.md     # Markdown形式の判断記録
+outputs/YYYY-MM/run_log.json        # 既存のrun_logに判断情報が追記される
+```
+
+### Pre-Trade Gate FAILの場合
+
+- `REVIEW_CONFIRMED`（レビュー確認済み）は表示・選択できません
+- `SKIP_THIS_MONTH` / `REQUEST_RERUN` / `MANUAL_OVERRIDE` が選択肢となります
+- いずれもコメントが必須です
+- **自動売買は行いません**
+
+### Slack表示
+
+Slack投稿の末尾に「月次レビュー判断」セクションが追加されます。Pre-Trade Gate の状態に応じて表示内容が変わります。
+
+- **PASS**: レビュー確認済み / 今月は見送り / 再レビュー
+- **PASS_WITH_CAUTION / REVIEW_REQUIRED**: 上記 + 手動判断で採用（コメント必須）
+- **FAIL**: レビュー確認済みは表示なし。見送り / 再レビュー / 手動判断で採用のみ
+
+現在はCLI記録方式です（Slackボタンのインタラクティブ受信は未実装）。
+
+### 安全ルール
+
+- 判断ログは売買実行ではありません
+- `auto_trade: false`、`order_generated: false` が必ず記録されます
+- `MANUAL_OVERRIDE` はコメント必須です
+- `final_allocation = quant_recommendation` は維持されます
+
 ## 既知の制限事項・注意点
 
 - 日本円建てETF（1306.T等）と米ドル建てETFを同一スコアで比較しており、**通貨換算は行っていません**

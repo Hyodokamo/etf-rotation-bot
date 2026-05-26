@@ -34,6 +34,14 @@ from src.backtest import build_backtest_markdown, compare_backtest
 from src.config_loader import load_config
 from src.data_fetcher import fetch_prices
 from src.data_quality import check_and_clean
+from src.decision_logger import (
+    ReviewDecision,
+    create_decision_log,
+    load_latest_run_context,
+    save_decision_log,
+    update_run_log_with_decision,
+    validate_decision,
+)
 from src.indicators import compute_indicators
 from src.llm.factory import create_client
 from src.llm_auditor import run_audit, save_audit_result
@@ -69,6 +77,25 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=12,
         help="Number of months for simplified backtest (default: 12)",
+    )
+    parser.add_argument(
+        "--record-decision",
+        default=None,
+        metavar="DECISION",
+        help=(
+            "Record a review decision without re-running the pipeline. "
+            "Valid values: REVIEW_CONFIRMED, SKIP_THIS_MONTH, REQUEST_RERUN, MANUAL_OVERRIDE"
+        ),
+    )
+    parser.add_argument(
+        "--decision-comment",
+        default="",
+        help="Comment to attach to the review decision (required for MANUAL_OVERRIDE and FAIL gate)",
+    )
+    parser.add_argument(
+        "--decided-by",
+        default="manual",
+        help="Who made the decision (default: manual)",
     )
     return parser.parse_args()
 
@@ -134,9 +161,84 @@ def _save_run_log(
     logger.info(f"Run log saved to {path}")
 
 
+def _handle_record_decision(args: argparse.Namespace) -> None:
+    """Record a review decision from CLI without re-running the pipeline."""
+    run_date = date.fromisoformat(args.date) if args.date else date.today()
+    run_date_str = run_date.isoformat()
+    logger.info(f"=== Recording review decision: {args.record_decision} (run_date={run_date_str}) ===")
+
+    cfg = load_config(args.config)
+    review_cfg = cfg.slack_review_decision
+
+    try:
+        decision = ReviewDecision(args.record_decision)
+    except ValueError:
+        valid = [d.value for d in ReviewDecision]
+        print(f"Error: '{args.record_decision}' は無効な判断種別です。有効な値: {valid}", flush=True)
+        sys.exit(1)
+
+    # Load context from most recent run
+    try:
+        ctx = load_latest_run_context(run_date_str, cfg.report.output_dir)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", flush=True)
+        sys.exit(1)
+
+    run_log = ctx["run_log"]
+    gate_raw = ctx.get("pre_trade_gate") or {}
+    gate_status = run_log.get("pre_trade_gate_status") or gate_raw.get("overall_status")
+    gate_failures = run_log.get("pre_trade_gate_failures") or [
+        c["check_id"] for c in gate_raw.get("checks", [])
+        if c.get("status") in ("FAIL", "REVIEW_REQUIRED") and c.get("severity") != "INFO"
+    ]
+    ai_audit_status = run_log.get("ai_audit_status") or ctx.get("ai_audit_status")
+    final_allocation = run_log.get("final_allocation", {})
+    strategy_variant = run_log.get("strategy_variant")
+
+    try:
+        validate_decision(
+            decision=decision,
+            comment=args.decision_comment,
+            pre_trade_gate_status=gate_status,
+            allow_manual_override=review_cfg.allow_manual_override,
+            require_comment_on_manual_override=review_cfg.require_comment_on_manual_override,
+            require_comment_on_fail_gate=review_cfg.require_comment_on_fail_gate,
+        )
+    except ValueError as e:
+        print(f"Error: {e}", flush=True)
+        sys.exit(1)
+
+    log = create_decision_log(
+        run_date=run_date_str,
+        decision=decision,
+        comment=args.decision_comment,
+        decided_by=args.decided_by,
+        strategy_variant=strategy_variant,
+        pre_trade_gate_status=gate_status,
+        pre_trade_gate_failures=gate_failures,
+        ai_audit_status=ai_audit_status,
+        final_allocation=final_allocation,
+    )
+
+    output_dir = Path(cfg.report.output_dir) / run_date.strftime("%Y-%m")
+    json_path, md_path = save_decision_log(log, str(output_dir))
+    update_run_log_with_decision(ctx["run_log_path"], log, json_path)
+
+    print(f"\n判断ログを保存しました:")
+    print(f"  JSON: {json_path}")
+    print(f"  Markdown: {md_path}")
+    print(f"  判断: {log.decision.value} ({log.to_dict()['decision_label']})")
+    logger.info("=== Review decision recorded successfully ===")
+
+
 def main() -> None:
     load_dotenv()
     args = parse_args()
+
+    # Phase 3: record-decision mode — no pipeline re-run
+    if args.record_decision:
+        _handle_record_decision(args)
+        return
 
     run_date = date.fromisoformat(args.date) if args.date else date.today()
     logger.info(f"=== ETF Rotation Bot starting (run_date={run_date}) ===")
@@ -370,6 +472,7 @@ def main() -> None:
         risk_mode_check=risk_mode_check_result,
         pre_trade_gate=pre_trade_gate_result,
         strategy_variant=variant_name,
+        slack_review_cfg=cfg.slack_review_decision,
     )
     post_to_slack(slack_msg)
 

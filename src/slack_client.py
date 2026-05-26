@@ -3,6 +3,7 @@ import os
 import requests
 
 from src.logger import logger
+from src.slack_blocks import build_review_decision_section
 
 
 def post_to_slack(message: str) -> bool:
@@ -40,6 +41,7 @@ def build_slack_summary(
     risk_mode_check=None,
     pre_trade_gate=None,
     strategy_variant: str | None = None,
+    slack_review_cfg=None,
 ) -> str:
     top5 = sorted(weights.items(), key=lambda x: -x[1])[:5]
     top5_str = "\n".join(f"  {t}: {w:.1%}" for t, w in top5)
@@ -98,4 +100,15 @@ def build_slack_summary(
             lines.append(f"防御資産比率：{dw:.1%}（Risk-ONだがやや高め）")
 
     lines.append(f"レポート: {report_path}")
+
+    # Phase 3: Review decision section
+    review_enabled = slack_review_cfg.enabled if slack_review_cfg is not None else True
+    if review_enabled:
+        gate_status = pre_trade_gate.overall_status if pre_trade_gate is not None else None
+        gate_failures = (
+            [c.check_id for c in pre_trade_gate.checks if c.status in ("FAIL", "REVIEW_REQUIRED") and c.severity != "INFO"]
+            if pre_trade_gate is not None else []
+        )
+        lines.append(build_review_decision_section(gate_status, gate_failures))
+
     return "\n".join(lines)

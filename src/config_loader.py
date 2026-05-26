@@ -122,6 +122,16 @@ class StrategyVariantConfig(BaseModel):
     volatility_floor: float = 0.05
 
 
+class SlackReviewDecisionConfig(BaseModel):
+    enabled: bool = True
+    mode: str = "review_decision"
+    interactive_enabled: bool = False
+    allow_manual_override: bool = True
+    require_comment_on_manual_override: bool = True
+    require_comment_on_fail_gate: bool = True
+    decision_log_dir: str = "outputs"
+
+
 class AppConfig(BaseModel):
     universe: UniverseConfig
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
@@ -135,6 +145,7 @@ class AppConfig(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
     ai_audit: AiAuditConfig = Field(default_factory=AiAuditConfig)
     global_settings: GlobalSettings = Field(default_factory=GlobalSettings)
+    slack_review_decision: SlackReviewDecisionConfig = Field(default_factory=SlackReviewDecisionConfig)
 
     def production_assets(self) -> list[AssetConfig]:
         return [a for a in self.universe.assets if a.include_stage == "production"]

@@ -1,0 +1,50 @@
+# Phase 3.1: Investment Committee OS
+#
+# Core Committee / Satellite Committee の二層会議体を定義する。
+# 初期実装は必ず shadow mode（最終配分には一切影響させない）。
+committee:
+  enabled: true
+  # shadow_mode: true の間は allocation_override を必ず false に固定し、
+  # 既存の定量配分・Pre-Trade Gate・AI監査・Slack通知の流れを変更しない。
+  shadow_mode: true
+  # shadow mode 中は false 固定。将来 active mode を検討する際のフラグ。
+  allocation_override_allowed: false
+  # 各メンバーのLLM応答に割り当てる最大トークン数
+  max_tokens_per_member: 1200
+  # LLM呼び出し方式:
+  #   batch      = 1回の呼び出しで全メンバー分を取得（初期値・低コスト）
+  #   per_member = メンバーごとに個別呼び出し（将来対応）
+  # batch でも各メンバーは独立評価として扱い、他メンバーの結論を参照しない。
+  llm_call_mode: "batch"
+  # Satellite Committee の起動方式:
+  #   always      = 毎回フル稼働（初期値・既存挙動を維持）
+  #   conditional = テーマ/成長株比率・売買増・Core WATCH以上・AI監査PASS_WITH_CAUTION以下
+  #                 などのトリガー成立時のみ起動
+  satellite_activation: "always"
+
+  # Core Committee: 定量・サイクル・バリュエーション・監査（毎月必ず稼働）
+  core_committee:
+    - member_id: aqr_meb
+      display_name: "AQR / Meb Faber 型"
+      focus: "定量・トレンド・ETFローテーション評価"
+    - member_id: howard_marks
+      display_name: "Howard Marks 型"
+      focus: "サイクル・過熱・リスク評価"
+    - member_id: rob_arnott
+      display_name: "Rob Arnott 型"
+      focus: "バリュエーション・平均回帰・スマートベータ評価"
+    - member_id: core_ai_auditor
+      display_name: "Core AI Auditor"
+      focus: "データ品質・ロジック・過剰最適化監査（投資家ではなく品質保証）"
+
+  # Satellite Committee: 長期品質・防御トレンド・大局テーマ
+  satellite_committee:
+    - member_id: buffett
+      display_name: "Buffett 型"
+      focus: "長期品質・事業価値・保有耐性評価"
+    - member_id: paul_tudor_jones
+      display_name: "Paul Tudor Jones 型"
+      focus: "防御的トレンド・損切り・200日線評価"
+    - member_id: druckenmiller
+      display_name: "Druckenmiller 型"
+      focus: "大局テーマ・集中投資仮説評価"

@@ -25,6 +25,7 @@ def build_report(
     risk_mode_check=None,
     pre_trade_gate=None,
     strategy_variant: str | None = None,
+    committee_result=None,
 ) -> str:
     if run_date is None:
         run_date = date.today()
@@ -305,6 +306,11 @@ def build_report(
                 flag = "✅" if nc.is_nisa_suitable else "❌"
                 lines.append(f"| {nc.ticker} | {flag} | {nc.reason} |")
             lines.append("")
+
+    # --- Investment Committee (Phase 3.1, shadow mode, display-only) ---
+    if committee_result is not None:
+        from src.committee.report_formatter import build_committee_markdown
+        lines.append(build_committee_markdown(committee_result))
 
     # --- Warnings ---
     lines.append("## 注意事項")

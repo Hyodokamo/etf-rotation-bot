@@ -15,6 +15,10 @@ venv/
 outputs/*
 !outputs/.gitkeep
 
+# Committee decision log (generated, append-only)
+logs/*
+!logs/.gitkeep
+
 # OS / Editor
 .DS_Store
 Thumbs.db

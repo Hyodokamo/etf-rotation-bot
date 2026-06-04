@@ -233,6 +233,111 @@ Slack投稿の末尾に「月次レビュー判断」セクションが追加さ
 - `MANUAL_OVERRIDE` はコメント必須です
 - `final_allocation = quant_recommendation` は維持されます
 
+## Phase 3.1: Investment Committee OS（shadow mode）
+
+定量モデルが確定した推奨配分に対し、著名投資家アーキタイプを模した**二層会議体**（Core / Satellite）が多面的な参考意見を出します。**shadow mode** であり、**最終配分・Pre-Trade Gate・AI監査には一切影響しません**（`allocation_override` は常に `false` 固定）。出力はMarkdownレポートとSlackに表示専用で追記されます。
+
+### メンバー構成
+
+| 委員会 | member_id | メンバー | 評価観点 |
+|--------|-----------|---------|---------|
+| Core | `aqr_meb` | AQR / Meb Faber 型 | 定量・トレンド・ETFローテーション |
+| Core | `howard_marks` | Howard Marks 型 | サイクル・過熱・リスク |
+| Core | `rob_arnott` | Rob Arnott 型 | バリュエーション・平均回帰・スマートベータ |
+| Core | `core_ai_auditor` | Core AI Auditor | データ品質・ロジック・過剰最適化監査（**投資家ではなく品質保証**。既存AI監査とは独立） |
+| Satellite | `buffett` | Buffett 型 | 長期品質・事業価値・保有耐性 |
+| Satellite | `paul_tudor_jones` | Paul Tudor Jones 型 | 防御的トレンド・損切り・200日線 |
+| Satellite | `druckenmiller` | Druckenmiller 型 | 大局テーマ・集中投資仮説 |
+
+各メンバーは**「本人を演じる」のではなく、公開された投資哲学に基づく判断様式（Level 2）でモデル化**されます（"You are an investment-analysis agent modeled on X-style thinking. You are not X."）。共通指示は `agents/common.md` に定義され、各メンバーのプロンプトに前置されます。
+
+各メンバーは独立評価として扱われ、他メンバーの結論を参照・追従せず、必ず「最も支持する理由」「最も反対する理由」、そして**最も強く反対する点（`dissenting_view`）**と**具体的な再レビュー条件（`next_review_triggers`）**を出します。`core_ai_auditor` のみ人格を持たない品質保証エージェントです。
+
+### Satellite Committee の起動方式
+
+`config/committee.yaml` の `satellite_activation` で制御します。
+
+| 値 | 挙動 |
+|----|------|
+| `always`（デフォルト） | 毎回フル稼働（既存挙動を維持） |
+| `conditional` | テーマ/セクターETF・成長株比率・売買増（turnover>0）・AI監査がPASS_WITH_CAUTION以下、のいずれか成立時のみ起動 |
+
+Core Committee は毎月必ず稼働します。`conditional` で未起動の場合、Satellite判定は `INSUFFICIENT_DATA` となり、レポートに未起動理由が表示されます。
+
+### 判定種別（5種）
+
+`PASS` / `PASS_WITH_CAUTION` / `WATCH` / `REJECT` / `INSUFFICIENT_DATA`
+
+Core / Satellite の判定は別々に集約され、最終判定は両者を統合して決まります。集約は**多数決ではなく重大度ベース**（1人のREJECTが全体を支配）です。
+
+### 設定
+
+`config/committee.yaml` で制御します。
+
+```yaml
+committee:
+  enabled: true
+  shadow_mode: true              # 初期実装は必ず shadow mode
+  allocation_override_allowed: false
+  max_tokens_per_member: 1200
+  llm_call_mode: "batch"         # batch（初期値・1回呼び出し） / per_member（将来対応）
+  satellite_activation: "always" # always / conditional
+```
+
+共通エージェント指示は `agents/common.md`（Level 2 モデリング・捏造禁止・`dissenting_view` 要求・具体的レビュー条件）に切り出されています。
+
+`llm_call_mode` を `per_member` にするとメンバーごとに個別LLM呼び出しへ切り替わります（既定は `batch`）。
+
+### 実行とLLM
+
+Committee は **AI監査が有効でLLMクライアントが利用可能なとき**に実行されます（既存のAI監査と同じ provider/model を再利用）。`--no-ai-audit` ではスキップされ、レポート/Slackにも追加されません。
+
+```bash
+python main.py --ai-audit --ai-audit-provider openai
+```
+
+### 出力先
+
+```
+outputs/YYYY-MM/committee_result.json   # Committee判定結果（JSON）
+outputs/report_YYYY-MM-DD.md            # レポート末尾に Committee セクションを追記
+outputs/YYYY-MM/run_log.json            # committee_*_verdict / committee_shadow_mode を追記
+logs/committee_decision_log.jsonl       # Phase 3.2: 月次Committee判断の追記ログ（後述）
+```
+
+### Phase 3.2: Committee Decision Log
+
+Committee実行のたびに、その月次判断を `logs/committee_decision_log.jsonl` に **append-only** で1行追記します。「過去のCommitteeが何を判断し、その後どう変化したか」を後から検証するための versioned ログです。配分ロジックには一切影響しません（shadow mode 不変条件を維持）。
+
+- **AI委員会ログはCommittee実行時に毎回保存**されます（`--record-committee-decision` 不要）。
+- **人間判断**は `--record-committee-decision` を付けたときのみ `human_decision` / `human_note` に記録されます（未指定時は `null`）。
+
+```bash
+# AI委員会ログのみ追記
+python main.py --ai-audit --ai-audit-provider openai --committee --committee-mode shadow
+
+# 人間判断付きで追記
+python main.py --ai-audit --ai-audit-provider openai --committee --committee-mode shadow \
+  --record-committee-decision --human-decision HOLD --human-note "Shadow mode validation"
+```
+
+`--human-decision` の値: `HOLD` / `BUY` / `ADD` / `TRIM` / `EXIT` / `WAIT` / `SKIP`。
+
+**ログスキーマ（schema_version 1.0）**: `schema_version`, `run_id`, `timestamp`(JST), `date`, `strategy_variant`, `risk_mode`, `final_allocation`, `ai_audit_status`, `core_committee_verdict`, `satellite_committee_verdict`, `final_committee_verdict`, `recommended_action`, `allocation_override`(常にfalse), `member_outputs`, `dissenting_views`, `next_review_triggers`, `satellite_activated`, `satellite_activation_reason`, `human_decision`(初期null), `human_note`(初期null)。
+
+**安全設計**:
+- APIキー・プロンプト全文・秘密情報は保存しません（ホワイトリスト＋再帰的リダクション）。
+- append-only（既存行を書き換えない）。
+- JSONLの1行が壊れても、読み取りはその行のみスキップして全体は落ちません。
+- 既存の月次レビュー判断ログ（Phase 3）とは責務を分離した **Committee専用ログ** です。
+
+### 安全ルール
+
+- `allocation_override` は常に `false`（`shadow_mode` 検証で強制）
+- Committee は配分（weights）を一切返さず、`final_allocation = quant_recommendation` を維持
+- 自動売買・注文生成は行わない（メンバー出力中の不適切な売買表現は検出して保留）
+- Slackボタンのインタラクティブ受信は未実装（表示専用）
+
 ## 既知の制限事項・注意点
 
 - 日本円建てETF（1306.T等）と米ドル建てETFを同一スコアで比較しており、**通貨換算は行っていません**

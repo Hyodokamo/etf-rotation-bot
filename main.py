@@ -30,6 +30,11 @@ from src.ai_audit_evaluation import build_evaluation_markdown, build_quality_che
 from src.allocation import compute_allocation, resolve_max_assets, trim_to_max_assets
 from src.asset_role import filter_ranking_scores
 from src.audit_context_builder import build_audit_context
+from src.committee.runner import load_committee_config, run_committee, save_committee_result
+from src.committee.decision_logger import (
+    append_committee_decision_log,
+    build_committee_log_entry,
+)
 from src.backtest import build_backtest_markdown, compare_backtest
 from src.config_loader import load_config
 from src.data_fetcher import fetch_prices
@@ -97,6 +102,34 @@ def parse_args() -> argparse.Namespace:
         default="manual",
         help="Who made the decision (default: manual)",
     )
+    parser.add_argument(
+        "--committee",
+        action="store_true",
+        default=None,
+        help="Force-enable the Investment Committee (shadow mode). Overrides config/committee.yaml enabled.",
+    )
+    parser.add_argument(
+        "--committee-mode",
+        default=None,
+        help="Committee mode. Phase 3.1 supports only 'shadow' (no allocation override).",
+    )
+    parser.add_argument(
+        "--record-committee-decision",
+        action="store_true",
+        default=False,
+        help="Also record a human decision (--human-decision/--human-note) into the committee log.",
+    )
+    parser.add_argument(
+        "--human-decision",
+        default=None,
+        choices=["HOLD", "BUY", "ADD", "TRIM", "EXIT", "WAIT", "SKIP"],
+        help="Human decision to record alongside the committee log (requires --record-committee-decision).",
+    )
+    parser.add_argument(
+        "--human-note",
+        default=None,
+        help="Free-text note for the human committee decision.",
+    )
     return parser.parse_args()
 
 
@@ -125,6 +158,7 @@ def _save_run_log(
     pre_trade_gate=None,
     pre_trade_gate_file: str | None = None,
     strategy_variant: str | None = None,
+    committee_result=None,
 ) -> None:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -156,6 +190,12 @@ def _save_run_log(
         ]
     if pre_trade_gate_file:
         log["pre_trade_gate_file"] = pre_trade_gate_file
+    if committee_result is not None:
+        log["committee_shadow_mode"] = committee_result.shadow_mode
+        log["committee_allocation_override"] = committee_result.allocation_override
+        log["committee_final_verdict"] = committee_result.final_committee_verdict.value
+        log["committee_core_verdict"] = committee_result.core_committee_verdict.value
+        log["committee_satellite_verdict"] = committee_result.satellite_committee_verdict.value
     path = out / "run_log.json"
     path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info(f"Run log saved to {path}")
@@ -385,6 +425,8 @@ def main() -> None:
 
     # --- AI Audit (Phase 2) ---
     audit_result = None
+    llm_client = None
+    audit_context: dict | None = None
     ai_enabled = _resolve_ai_audit_enabled(args, cfg.ai_audit.enabled)
     provider = cfg.ai_audit.provider
     model = cfg.ai_audit.model
@@ -401,7 +443,7 @@ def main() -> None:
             or cfg.ai_audit.model
         )
         logger.info(f"AI audit enabled (provider={provider}, model={model})")
-        context = build_audit_context(
+        audit_context = build_audit_context(
             cfg=cfg,
             weights=final_weights,
             scores=scores,
@@ -415,9 +457,10 @@ def main() -> None:
         )
         try:
             llm_client = create_client(provider=provider, model=model)
-            audit_result = run_audit(context=context, weights=final_weights, client=llm_client)
+            audit_result = run_audit(context=audit_context, weights=final_weights, client=llm_client)
         except (ValueError, NotImplementedError) as e:
             logger.error(f"AI audit skipped: {e}")
+            llm_client = None
             audit_result = None
         if audit_result is not None:
             save_audit_result(audit_result, str(audit_output_dir))
@@ -425,6 +468,71 @@ def main() -> None:
             logger.warning("AI audit returned None — Phase 1 results preserved")
     else:
         logger.info("AI audit disabled")
+
+    # --- Investment Committee (Phase 3.1, shadow mode) ---
+    # Runs only when an LLM client is available (i.e. AI audit enabled). The
+    # committee NEVER changes final_weights — it is display-only advisory output.
+    committee_result = None
+    committee_cfg = load_committee_config()
+    # CLI overrides (Step 5): --committee force-enables; --committee-mode selects mode.
+    if args.committee:
+        committee_cfg.enabled = True
+    if args.committee_mode is not None:
+        if args.committee_mode != "shadow":
+            logger.warning(
+                f"--committee-mode='{args.committee_mode}' は未対応。Phase 3.1 は shadow のみ — shadow を強制します。"
+            )
+        committee_cfg.shadow_mode = True
+    if args.human_decision and not args.record_committee_decision:
+        logger.warning(
+            "--human-decision を反映するには --record-committee-decision が必要です。今回は人間判断を記録しません。"
+        )
+    if committee_cfg.enabled and llm_client is not None:
+        try:
+            if audit_context is None:
+                audit_context = build_audit_context(
+                    cfg=cfg,
+                    weights=final_weights,
+                    scores=scores,
+                    indicators=indicators,
+                    risk_gate=risk_gate,
+                    prev_weights=prev_weights,
+                    turnover=turnover,
+                    run_date=run_date,
+                    risk_mode_check=risk_mode_check_result,
+                    pre_trade_gate=pre_trade_gate_result,
+                )
+            committee_result = run_committee(
+                audit_context,
+                committee_cfg,
+                llm_client,
+                ai_audit_status=audit_result.status.value if audit_result else None,
+            )
+            save_committee_result(committee_result, str(audit_output_dir))
+
+            # Phase 3.2: append the committee judgment to the append-only decision
+            # log. The AI committee log is written on every committee run; human
+            # decision fields are filled only when --record-committee-decision is set.
+            try:
+                record_human = args.record_committee_decision
+                log_entry = build_committee_log_entry(
+                    committee_result=committee_result,
+                    run_date=run_date.isoformat(),
+                    strategy_variant=variant_name,
+                    risk_mode="risk_off" if risk_gate.risk_off else "risk_on",
+                    final_allocation=final_weights,
+                    ai_audit_status=audit_result.status.value if audit_result else None,
+                    human_decision=args.human_decision if record_human else None,
+                    human_note=args.human_note if record_human else None,
+                )
+                append_committee_decision_log(log_entry)
+            except Exception as e:
+                logger.warning(f"Committee decision log skipped due to error: {type(e).__name__}: {e}")
+        except Exception as e:  # never break the pipeline on committee failure
+            logger.warning(f"Investment Committee skipped due to error: {type(e).__name__}: {e}")
+            committee_result = None
+    elif committee_cfg.enabled:
+        logger.info("Investment Committee enabled but no LLM client available — skipped (shadow).")
 
     # Phase 2.5: AI audit quality evaluation
     quality_checks = build_quality_checks(audit_result)
@@ -454,6 +562,7 @@ def main() -> None:
         risk_mode_check=risk_mode_check_result,
         pre_trade_gate=pre_trade_gate_result,
         strategy_variant=variant_name,
+        committee_result=committee_result,
     )
 
     report_path = save_report(report_text, cfg.report.output_dir, run_date=run_date)
@@ -473,6 +582,7 @@ def main() -> None:
         pre_trade_gate=pre_trade_gate_result,
         strategy_variant=variant_name,
         slack_review_cfg=cfg.slack_review_decision,
+        committee_result=committee_result,
     )
     post_to_slack(slack_msg)
 
@@ -488,6 +598,7 @@ def main() -> None:
         pre_trade_gate=pre_trade_gate_result,
         pre_trade_gate_file=pre_trade_gate_file,
         strategy_variant=variant_name,
+        committee_result=committee_result,
     )
 
     logger.info("=== ETF Rotation Bot completed successfully ===")

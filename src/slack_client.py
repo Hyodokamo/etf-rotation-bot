@@ -42,6 +42,7 @@ def build_slack_summary(
     pre_trade_gate=None,
     strategy_variant: str | None = None,
     slack_review_cfg=None,
+    committee_result=None,
 ) -> str:
     top5 = sorted(weights.items(), key=lambda x: -x[1])[:5]
     top5_str = "\n".join(f"  {t}: {w:.1%}" for t, w in top5)
@@ -100,6 +101,11 @@ def build_slack_summary(
             lines.append(f"防御資産比率：{dw:.1%}（Risk-ONだがやや高め）")
 
     lines.append(f"レポート: {report_path}")
+
+    # Phase 3.1: Investment Committee summary (shadow mode, display-only)
+    if committee_result is not None:
+        from src.committee.report_formatter import build_committee_slack_summary
+        lines.append(build_committee_slack_summary(committee_result))
 
     # Phase 3: Review decision section
     review_enabled = slack_review_cfg.enabled if slack_review_cfg is not None else True

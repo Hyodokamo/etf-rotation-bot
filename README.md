@@ -398,6 +398,29 @@ python main.py --candidate-review --candidate-review-slack
 
 出力: `reports/candidates/candidate_review_YYYYMMDD.md`（候補ごとに verdict・買い/反対根拠・リスク・required_checks・エントリー条件・反証条件・sizing_note・メンバー所見）。`reports/` は `.gitignore` 済み。
 
+### Phase 3.6: Candidate Review Decision Log
+
+Candidate Review の結果を `logs/candidate_review_log.jsonl` に **1候補=1行・append-only** で保存します（versioned schema 1.0）。GRID/BOTZ/ARKQ等の判定・根拠・反対理由・人間判断を時系列で追跡し、**LLMの判定揺れを後から検出**できる土台です。Monthly Review の判断ログ（`logs/committee_decision_log.jsonl`）とは**完全分離**。配分変更・注文数量計算・自動売買はしません（`allocation_override` 常に false、`intended_amount_jpy` は検討額で株数に変換しない）。
+
+- **Candidate Review実行時、AIレビュー結果は常に保存**されます。
+- **人間判断**は `--record-candidate-decision` 指定時のみ `human_decision` / `human_note` に保存（未指定時は `null`）。
+
+```bash
+# 全候補をレビューしログ追記
+python main.py --candidate-review --candidate-file data/watchlist_candidates.csv
+
+# GRIDのみレビューしログ追記
+python main.py --candidate-review --candidate-symbol GRID
+
+# 人間判断付きでログ追記
+python main.py --candidate-review --candidate-symbol GRID \
+  --record-candidate-decision --candidate-human-decision WAIT --candidate-human-note "判定揺れ確認のため様子見"
+```
+
+`--candidate-human-decision` の値: `WATCHLIST` / `SMALL_TEST_BUY_CANDIDATE` / `WAIT` / `REJECT` / `RE_REVIEW` / `SKIP`。
+
+保存フィールド（schema_version 1.0）: `review_id` / `timestamp`(JST) / `review_date` / `candidate_symbol` / `candidate_name` / `asset_type` / `theme` / `candidate_action` / `intended_amount_jpy`(検討額) / `account` / `candidate_verdict` / `confidence` / `strongest_buy_thesis` / `strongest_rejection_thesis` / `key_risks` / `required_checks` / `entry_conditions` / `invalidation_conditions` / `sizing_note` / `final_advisory` / `member_outputs` / `allocation_override`(常にfalse) / `human_decision`(初期null) / `human_note`(初期null)。APIキー・プロンプト・raw_response は保存しません。壊れた行があっても読み取りは継続します。
+
 ### 安全ルール
 
 - `allocation_override` は常に `false`（`shadow_mode` 検証で強制）

@@ -48,6 +48,14 @@ from src.committee.candidate_review import (
     review_watchlist,
     save_candidate_report,
 )
+from src.committee.candidate_decision_logger import (
+    CANDIDATE_LOG_SCHEMA_VERSION,
+    DEFAULT_CANDIDATE_LOG_PATH,
+    HumanCandidateDecision,
+    append_candidate_decision_log,
+    build_candidate_log_entry,
+    read_candidate_decision_log,
+)
 from src.committee.report_formatter import (
     build_committee_markdown,
     build_committee_slack_summary,
@@ -105,4 +113,10 @@ __all__ = [
     "review_candidate",
     "review_watchlist",
     "save_candidate_report",
+    "CANDIDATE_LOG_SCHEMA_VERSION",
+    "DEFAULT_CANDIDATE_LOG_PATH",
+    "HumanCandidateDecision",
+    "append_candidate_decision_log",
+    "build_candidate_log_entry",
+    "read_candidate_decision_log",
 ]

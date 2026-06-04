@@ -46,6 +46,10 @@ from src.committee.candidate_review import (
     review_watchlist,
     save_candidate_report,
 )
+from src.committee.candidate_decision_logger import (
+    append_candidate_decision_log,
+    build_candidate_log_entry,
+)
 from src.backtest import build_backtest_markdown, compare_backtest
 from src.config_loader import load_config
 from src.data_fetcher import fetch_prices
@@ -174,6 +178,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Post the Candidate Review summary to Slack.",
+    )
+    parser.add_argument(
+        "--record-candidate-decision",
+        action="store_true",
+        default=False,
+        help="Also record a human decision into the candidate review log.",
+    )
+    parser.add_argument(
+        "--candidate-human-decision",
+        default=None,
+        choices=["WATCHLIST", "SMALL_TEST_BUY_CANDIDATE", "WAIT", "REJECT", "RE_REVIEW", "SKIP"],
+        help="Human decision for the candidate (requires --record-candidate-decision).",
+    )
+    parser.add_argument(
+        "--candidate-human-note",
+        default=None,
+        help="Free-text note for the candidate human decision.",
     )
     return parser.parse_args()
 
@@ -383,6 +404,25 @@ def _handle_candidate_review(args: argparse.Namespace) -> None:
 
     markdown = build_candidate_markdown(results, run_date.isoformat())
     report_path = save_candidate_report(markdown, run_date.isoformat())
+
+    # Phase 3.6: append each candidate review to the append-only decision log.
+    # AI review is always logged; human decision filled only with the flag.
+    if args.candidate_human_decision and not args.record_candidate_decision:
+        logger.warning(
+            "--candidate-human-decision を反映するには --record-candidate-decision が必要です。"
+            "今回は人間判断を記録しません。"
+        )
+    record_human = args.record_candidate_decision
+    for r in results:
+        try:
+            entry = build_candidate_log_entry(
+                r,
+                human_decision=args.candidate_human_decision if record_human else None,
+                human_note=args.candidate_human_note if record_human else None,
+            )
+            append_candidate_decision_log(entry)
+        except Exception as e:
+            logger.warning(f"Candidate decision log skipped for {r.candidate.get('symbol')}: {type(e).__name__}: {e}")
 
     if args.candidate_review_slack:
         slack_text = "\n\n".join(build_candidate_slack_summary(r) for r in results)

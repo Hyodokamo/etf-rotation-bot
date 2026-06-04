@@ -226,6 +226,21 @@ Slack投稿の末尾に「月次レビュー判断」セクションが追加さ
 
 現在はCLI記録方式です（Slackボタンのインタラクティブ受信は未実装）。
 
+## Phase 3.6.1: Slack Executive Digest
+
+Committee実行時（`--ai-audit ... --committee`）のSlack通知は、「ファイル確認の通知」ではなく**スマホで読める投資委員会サマリー**になります。詳細はMarkdownレポートに残し、Slackは要約に徹します（決定的に生成・LLM再呼び出しなし・配分変更なし）。
+
+Slack表示構成:
+- 今月の結論（1文）／戦略・リスクモード・ターンオーバー／Top配分／AI監査（1〜2文）
+- Investment Committee 最終判定（Core/Satellite）
+- **Committee 論点**（最大4件：警戒メンバー優先＋`core_ai_auditor`、ETF名・数値を含む具体コメント）
+- **各エージェントの一言**（全7メンバー各1行・原則80字以内。PASSは許容理由、WATCH/REJECT/PASS_WITH_CAUTIONは警戒理由、AI Auditorは品質保証観点）
+- **主な反対意見 Top3** / **次回までの監視条件 Top3**（具体銘柄・閾値を優先）
+- **Committee Advisory Top3**（HIGH優先）／前回比 severity
+- shadow mode 注記（配分変更なし／売買数量計算なし／自動売買なし）／詳細レポートパス
+
+Committee非実行時（`--no-ai-audit` 等）は従来の簡易サマリーを使用します。digest生成ヘルパ（`build_committee_debate_highlights` / `build_agent_one_liners` / `select_top_dissenting_views` / `select_top_review_triggers`）は `CommitteeResult` でもメンバー辞書リストでも動作し、将来 Candidate Review にも流用できます。
+
 ### 安全ルール
 
 - 判断ログは売買実行ではありません
@@ -420,6 +435,25 @@ python main.py --candidate-review --candidate-symbol GRID \
 `--candidate-human-decision` の値: `WATCHLIST` / `SMALL_TEST_BUY_CANDIDATE` / `WAIT` / `REJECT` / `RE_REVIEW` / `SKIP`。
 
 保存フィールド（schema_version 1.0）: `review_id` / `timestamp`(JST) / `review_date` / `candidate_symbol` / `candidate_name` / `asset_type` / `theme` / `candidate_action` / `intended_amount_jpy`(検討額) / `account` / `candidate_verdict` / `confidence` / `strongest_buy_thesis` / `strongest_rejection_thesis` / `key_risks` / `required_checks` / `entry_conditions` / `invalidation_conditions` / `sizing_note` / `final_advisory` / `member_outputs` / `allocation_override`(常にfalse) / `human_decision`(初期null) / `human_note`(初期null)。APIキー・プロンプト・raw_response は保存しません。壊れた行があっても読み取りは継続します。
+
+### Phase 3.7: Candidate Review Stability Check
+
+`logs/candidate_review_log.jsonl` を読み、候補ごとに直近2件のレビューを比較して**判定の安定性（LLMの判定揺れ）を監査**します。これは**承認判断ではなく判定品質の監査**です。決定的なPythonロジックのみで、LLMには依存しません。配分変更・注文数量計算・自動売買はしません。
+
+`stability`: `STABLE` / `MINOR_CHANGE` / `UNSTABLE` / `INSUFFICIENT_HISTORY`。`severity`: `NONE` / `INFO` / `CAUTION` / `MATERIAL`。`verdict_direction`: `IMPROVED` / `WORSENED` / `UNCHANGED` / `MIXED` / `UNKNOWN`。`recommended_handling`: `OK_FOR_WATCHLIST` / `REVIEW_BEFORE_ACTION` / `HUMAN_REVIEW_REQUIRED` / `DO_NOT_ACT_YET`。
+
+主な判定: 直近2件なし→`INSUFFICIENT_HISTORY`、WAIT⇔REJECT間で揺れ→`UNSTABLE`、REJECTへ悪化→`UNSTABLE`/`MATERIAL`、confidence差20pt以上→`CAUTION`、reject連続→`STABLE`だが`DO_NOT_ACT_YET`、人間判断と現verdictが大きく乖離→`HUMAN_REVIEW_REQUIRED`。揺れの大きい候補は Slack承認対象にせず人間レビュー必須として扱えます。
+
+```bash
+# 候補ごとの安定性レポート（reports/candidates/candidate_stability_YYYYMMDD.md）
+python main.py --candidate-stability
+
+# GRIDのみ
+python main.py --candidate-stability --candidate-symbol GRID
+
+# Slack送信
+python main.py --candidate-stability --candidate-symbol GRID --candidate-stability-slack
+```
 
 ### 安全ルール
 

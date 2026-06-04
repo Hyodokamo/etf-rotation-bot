@@ -56,6 +56,26 @@ from src.committee.candidate_decision_logger import (
     build_candidate_log_entry,
     read_candidate_decision_log,
 )
+from src.committee.candidate_stability import (
+    RecommendedHandling,
+    Stability,
+    StabilityResult,
+    StabilitySeverity,
+    VerdictDirection,
+    build_stability,
+    build_stability_markdown,
+    build_stability_slack_summary,
+    check_candidate_stability,
+    save_stability_report,
+)
+from src.committee.slack_digest import (
+    build_advisory_top,
+    build_agent_one_liners,
+    build_committee_debate_highlights,
+    build_executive_digest,
+    select_top_dissenting_views,
+    select_top_review_triggers,
+)
 from src.committee.report_formatter import (
     build_committee_markdown,
     build_committee_slack_summary,
@@ -119,4 +139,20 @@ __all__ = [
     "append_candidate_decision_log",
     "build_candidate_log_entry",
     "read_candidate_decision_log",
+    "RecommendedHandling",
+    "Stability",
+    "StabilityResult",
+    "StabilitySeverity",
+    "VerdictDirection",
+    "build_stability",
+    "build_stability_markdown",
+    "build_stability_slack_summary",
+    "check_candidate_stability",
+    "save_stability_report",
+    "build_advisory_top",
+    "build_agent_one_liners",
+    "build_committee_debate_highlights",
+    "build_executive_digest",
+    "select_top_dissenting_views",
+    "select_top_review_triggers",
 ]

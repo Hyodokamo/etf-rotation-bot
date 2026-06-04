@@ -50,6 +50,13 @@ from src.committee.candidate_decision_logger import (
     append_candidate_decision_log,
     build_candidate_log_entry,
 )
+from src.committee.candidate_stability import (
+    build_stability_markdown,
+    build_stability_slack_summary,
+    check_candidate_stability,
+    save_stability_report,
+)
+from src.committee.slack_digest import build_executive_digest
 from src.backtest import build_backtest_markdown, compare_backtest
 from src.config_loader import load_config
 from src.data_fetcher import fetch_prices
@@ -195,6 +202,18 @@ def parse_args() -> argparse.Namespace:
         "--candidate-human-note",
         default=None,
         help="Free-text note for the candidate human decision.",
+    )
+    parser.add_argument(
+        "--candidate-stability",
+        action="store_true",
+        default=False,
+        help="Audit candidate verdict stability from the candidate review log.",
+    )
+    parser.add_argument(
+        "--candidate-stability-slack",
+        action="store_true",
+        default=False,
+        help="Post the Candidate Stability Check summary to Slack.",
     )
     return parser.parse_args()
 
@@ -434,6 +453,34 @@ def _handle_candidate_review(args: argparse.Namespace) -> None:
     logger.info("=== Candidate Review completed ===")
 
 
+def _handle_candidate_stability(args: argparse.Namespace) -> None:
+    """Phase 3.7: audit candidate verdict stability (quality audit, not approval).
+
+    Reads the candidate review log only; does NOT run the monthly pipeline or
+    touch portfolio_state / final_allocation.
+    """
+    run_date = date.fromisoformat(args.date) if args.date else date.today()
+    logger.info(f"=== Candidate Stability Check (run_date={run_date}) ===")
+
+    results = check_candidate_stability(symbol=args.candidate_symbol)
+    if not results:
+        print("No candidate history found in logs/candidate_review_log.jsonl.", flush=True)
+        return
+
+    markdown = build_stability_markdown(results, run_date.isoformat())
+    report_path = save_stability_report(markdown, run_date.isoformat())
+
+    if args.candidate_stability_slack:
+        slack_text = "\n\n".join(build_stability_slack_summary(r) for r in results)
+        post_to_slack("*Candidate Stability Check*\n\n" + slack_text)
+
+    print(f"\nCandidate Stability report: {report_path}")
+    for r in results:
+        print(f"  {r.candidate_symbol}: {r.stability.value}/{r.severity.value} "
+              f"-> {r.recommended_handling.value}")
+    logger.info("=== Candidate Stability Check completed ===")
+
+
 def main() -> None:
     load_dotenv()
     args = parse_args()
@@ -446,6 +493,11 @@ def main() -> None:
     # Phase 3.5: candidate review mode — separate from the monthly pipeline
     if args.candidate_review:
         _handle_candidate_review(args)
+        return
+
+    # Phase 3.7: candidate stability check — reads the candidate log only
+    if args.candidate_stability:
+        _handle_candidate_stability(args)
         return
 
     run_date = date.fromisoformat(args.date) if args.date else date.today()
@@ -774,22 +826,41 @@ def main() -> None:
     new_state = PortfolioState(date=run_date.isoformat(), weights=final_weights)
     save_state(new_state, state_path) if state_path else save_state(new_state)
 
-    slack_msg = build_slack_summary(
-        weights=final_weights,
-        risk_off=risk_gate.risk_off,
-        turnover=turnover,
-        report_path=str(report_path),
-        audit_result=audit_result,
-        proposed_turnover=proposed_turnover,
-        turnover_cfg=cfg.turnover,
-        risk_mode_check=risk_mode_check_result,
-        pre_trade_gate=pre_trade_gate_result,
-        strategy_variant=variant_name,
-        slack_review_cfg=cfg.slack_review_decision,
-        committee_result=committee_result,
-        committee_comparison=committee_comparison,
-        committee_advisory=committee_advisory,
-    )
+    # Phase 3.6.1: when the committee ran, post the concise Executive Digest;
+    # otherwise keep the existing summary (e.g. --no-ai-audit runs).
+    if committee_result is not None:
+        slack_msg = build_executive_digest(
+            weights=final_weights,
+            risk_off=risk_gate.risk_off,
+            turnover=turnover,
+            report_path=str(report_path),
+            audit_result=audit_result,
+            turnover_cfg=cfg.turnover,
+            risk_mode_check=risk_mode_check_result,
+            pre_trade_gate=pre_trade_gate_result,
+            strategy_variant=variant_name,
+            committee_result=committee_result,
+            committee_advisory=committee_advisory,
+            committee_comparison=committee_comparison,
+            slack_review_cfg=cfg.slack_review_decision,
+        )
+    else:
+        slack_msg = build_slack_summary(
+            weights=final_weights,
+            risk_off=risk_gate.risk_off,
+            turnover=turnover,
+            report_path=str(report_path),
+            audit_result=audit_result,
+            proposed_turnover=proposed_turnover,
+            turnover_cfg=cfg.turnover,
+            risk_mode_check=risk_mode_check_result,
+            pre_trade_gate=pre_trade_gate_result,
+            strategy_variant=variant_name,
+            slack_review_cfg=cfg.slack_review_decision,
+            committee_result=committee_result,
+            committee_comparison=committee_comparison,
+            committee_advisory=committee_advisory,
+        )
     post_to_slack(slack_msg)
 
     _save_run_log(

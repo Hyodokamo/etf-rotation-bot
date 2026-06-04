@@ -377,6 +377,27 @@ python main.py --ai-audit --ai-audit-provider openai --committee --committee-mod
 python main.py --ai-audit --ai-audit-provider openai --committee --no-committee-advisory
 ```
 
+### Phase 3.5: Candidate Review（新規買付候補レビュー）
+
+月次運用レビューとは**別系統**で、新規買付・追加購入候補（GRID/BOTZ/ARKQ等）をCommitteeで審査します。**明示実行時のみ**動作し、通常の月次実行では起動しません。**助言専用**で、配分変更・注文数量計算・自動売買・証券口座連携は一切行いません（`allocation_override` 常に false、`final_allocation` 不変）。`intended_amount_jpy` は**検討額**であり株数には変換しません。月次レビューより**厳しめ**に判定します（committee PASS でも小口テスト買い止まり）。
+
+候補は `data/watchlist_candidates.csv`（列: `symbol,name,asset_type,theme,candidate_action,intended_amount_jpy,account,reason,time_horizon,notes`）で定義。`candidate_action`: `NEW_BUY` / `ADD` / `HOLD_REVIEW` / `TRIM_REVIEW` / `EXIT_REVIEW`。
+
+`candidate_verdict`: `APPROVE_FOR_WATCHLIST` / `APPROVE_SMALL_TEST_BUY` / `WAIT_FOR_BETTER_ENTRY` / `REJECT_FOR_NOW` / `INSUFFICIENT_DATA`。Core/Satellite 両委員会を実行し、各候補で既存ポートフォリオとの重複・テーマ集中・価格トレンド・高値掴み・長期保有仮説・見直し条件・反証条件を必ず確認します。
+
+```bash
+# 全候補をレビュー（reports/candidates/candidate_review_YYYYMMDD.md を生成）
+python main.py --candidate-review --candidate-file data/watchlist_candidates.csv
+
+# 単一候補のみ
+python main.py --candidate-review --candidate-symbol GRID
+
+# Slackにも要約を送信
+python main.py --candidate-review --candidate-review-slack
+```
+
+出力: `reports/candidates/candidate_review_YYYYMMDD.md`（候補ごとに verdict・買い/反対根拠・リスク・required_checks・エントリー条件・反証条件・sizing_note・メンバー所見）。`reports/` は `.gitignore` 済み。
+
 ### 安全ルール
 
 - `allocation_override` は常に `false`（`shadow_mode` 検証で強制）

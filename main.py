@@ -37,6 +37,15 @@ from src.committee.decision_logger import (
 )
 from src.committee.review_comparison import compare_latest_committee_runs
 from src.committee.advisory import build_advisory
+from src.committee.candidate_review import (
+    build_candidate_markdown,
+    build_candidate_slack_summary,
+    fetch_candidate_trends,
+    filter_candidates,
+    load_watchlist,
+    review_watchlist,
+    save_candidate_report,
+)
 from src.backtest import build_backtest_markdown, compare_backtest
 from src.config_loader import load_config
 from src.data_fetcher import fetch_prices
@@ -143,6 +152,28 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Disable the Committee Advisory (助言) section.",
+    )
+    parser.add_argument(
+        "--candidate-review",
+        action="store_true",
+        default=False,
+        help="Run Candidate Review (new-buy candidates) instead of the monthly review.",
+    )
+    parser.add_argument(
+        "--candidate-file",
+        default="data/watchlist_candidates.csv",
+        help="Path to the watchlist CSV for Candidate Review.",
+    )
+    parser.add_argument(
+        "--candidate-symbol",
+        default=None,
+        help="Review only this single candidate symbol (e.g. GRID).",
+    )
+    parser.add_argument(
+        "--candidate-review-slack",
+        action="store_true",
+        default=False,
+        help="Post the Candidate Review summary to Slack.",
     )
     return parser.parse_args()
 
@@ -285,6 +316,84 @@ def _handle_record_decision(args: argparse.Namespace) -> None:
     logger.info("=== Review decision recorded successfully ===")
 
 
+def _resolve_ai_provider_model(args: argparse.Namespace, cfg) -> tuple[str, str]:
+    provider = (
+        args.ai_audit_provider
+        or os.environ.get("AI_AUDIT_PROVIDER", "").strip()
+        or cfg.ai_audit.provider
+    )
+    model = (
+        args.ai_audit_model
+        or os.environ.get("AI_AUDIT_MODEL", "").strip()
+        or cfg.ai_audit.model
+    )
+    return provider, model
+
+
+def _handle_candidate_review(args: argparse.Namespace) -> None:
+    """Phase 3.5: review new-buy candidates with the committee (advisory-only).
+
+    Separate path: does NOT run the monthly pipeline, does NOT touch
+    portfolio_state / final_allocation.
+    """
+    run_date = date.fromisoformat(args.date) if args.date else date.today()
+    logger.info(f"=== Candidate Review starting (run_date={run_date}) ===")
+
+    cfg = load_config(args.config)
+    committee_cfg = load_committee_config()
+    committee_cfg.enabled = True
+    committee_cfg.satellite_activation = "always"  # Satellite always runs for candidates
+
+    try:
+        candidates = load_watchlist(args.candidate_file)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error: {e}", flush=True)
+        sys.exit(1)
+
+    candidates = filter_candidates(candidates, args.candidate_symbol)
+    if not candidates:
+        print(f"No matching candidates (symbol={args.candidate_symbol}).", flush=True)
+        return
+
+    # LLM client (reuse AI-audit provider/model). None -> INSUFFICIENT_DATA results.
+    provider, model = _resolve_ai_provider_model(args, cfg)
+    llm_client = None
+    try:
+        llm_client = create_client(provider=provider, model=model)
+        logger.info(f"Candidate Review using provider={provider}, model={model}")
+    except (ValueError, NotImplementedError) as e:
+        logger.warning(f"Candidate Review: no LLM client ({e}) — results will be INSUFFICIENT_DATA.")
+
+    prev_state = load_state()
+    portfolio_holdings = prev_state.weights if prev_state else {}
+    universe_categories = {a.ticker: a.category for a in cfg.universe.assets}
+
+    # Best-effort price trends (network; failures degrade to None per symbol).
+    price_trends = fetch_candidate_trends([c.symbol for c in candidates])
+
+    results = review_watchlist(
+        candidates,
+        committee_cfg,
+        llm_client,
+        portfolio_holdings=portfolio_holdings,
+        universe_categories=universe_categories,
+        price_trends=price_trends,
+        review_date=run_date.isoformat(),
+    )
+
+    markdown = build_candidate_markdown(results, run_date.isoformat())
+    report_path = save_candidate_report(markdown, run_date.isoformat())
+
+    if args.candidate_review_slack:
+        slack_text = "\n\n".join(build_candidate_slack_summary(r) for r in results)
+        post_to_slack("*Candidate Review*\n\n" + slack_text)
+
+    print(f"\nCandidate Review report: {report_path}")
+    for r in results:
+        print(f"  {r.candidate['symbol']}: {r.candidate_verdict.value} (conf {r.confidence:.0%})")
+    logger.info("=== Candidate Review completed ===")
+
+
 def main() -> None:
     load_dotenv()
     args = parse_args()
@@ -292,6 +401,11 @@ def main() -> None:
     # Phase 3: record-decision mode — no pipeline re-run
     if args.record_decision:
         _handle_record_decision(args)
+        return
+
+    # Phase 3.5: candidate review mode — separate from the monthly pipeline
+    if args.candidate_review:
+        _handle_candidate_review(args)
         return
 
     run_date = date.fromisoformat(args.date) if args.date else date.today()

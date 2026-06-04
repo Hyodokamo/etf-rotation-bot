@@ -1,0 +1,4 @@
+symbol,name,asset_type,theme,candidate_action,intended_amount_jpy,account,reason,time_horizon,notes
+GRID,First Trust NASDAQ Clean Edge Smart Grid Infrastructure,theme_etf,clean_energy_grid,NEW_BUY,300000,NISA_growth,電力網インフラ・電化の構造的需要に乗りたい,long,既存ポートフォリオにテーマ重複がないか確認したい
+BOTZ,Global X Robotics & Artificial Intelligence ETF,theme_etf,robotics_ai,NEW_BUY,200000,NISA_growth,ロボティクス/AIの長期成長テーマ,long,QQQMと成長株テーマで重複しないか懸念
+ARKQ,ARK Autonomous Technology & Robotics ETF,active_etf,autonomous_robotics,HOLD_REVIEW,0,specific,アクティブETFの保有妥当性を確認したい,medium,信託報酬が高め。長期保有に耐えるか

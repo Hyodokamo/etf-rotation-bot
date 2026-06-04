@@ -35,6 +35,7 @@ from src.committee.decision_logger import (
     append_committee_decision_log,
     build_committee_log_entry,
 )
+from src.committee.review_comparison import compare_latest_committee_runs
 from src.backtest import build_backtest_markdown, compare_backtest
 from src.config_loader import load_config
 from src.data_fetcher import fetch_prices
@@ -129,6 +130,12 @@ def parse_args() -> argparse.Namespace:
         "--human-note",
         default=None,
         help="Free-text note for the human committee decision.",
+    )
+    parser.add_argument(
+        "--no-committee-comparison",
+        action="store_true",
+        default=False,
+        help="Disable the Committee Review Comparison (前回比) section even if 2+ log entries exist.",
     )
     return parser.parse_args()
 
@@ -473,6 +480,7 @@ def main() -> None:
     # Runs only when an LLM client is available (i.e. AI audit enabled). The
     # committee NEVER changes final_weights — it is display-only advisory output.
     committee_result = None
+    committee_comparison = None
     committee_cfg = load_committee_config()
     # CLI overrides (Step 5): --committee force-enables; --committee-mode selects mode.
     if args.committee:
@@ -528,6 +536,19 @@ def main() -> None:
                 append_committee_decision_log(log_entry)
             except Exception as e:
                 logger.warning(f"Committee decision log skipped due to error: {type(e).__name__}: {e}")
+
+            # Phase 3.3: deterministic comparison vs the previous logged run.
+            # Display-only; never affects allocation. Skipped if <2 valid entries.
+            if not args.no_committee_comparison:
+                try:
+                    committee_comparison = compare_latest_committee_runs()
+                    if committee_comparison is not None:
+                        logger.info(
+                            f"Committee Review Comparison: severity={committee_comparison.severity}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Committee Review Comparison skipped: {type(e).__name__}: {e}")
+                    committee_comparison = None
         except Exception as e:  # never break the pipeline on committee failure
             logger.warning(f"Investment Committee skipped due to error: {type(e).__name__}: {e}")
             committee_result = None
@@ -563,6 +584,7 @@ def main() -> None:
         pre_trade_gate=pre_trade_gate_result,
         strategy_variant=variant_name,
         committee_result=committee_result,
+        committee_comparison=committee_comparison,
     )
 
     report_path = save_report(report_text, cfg.report.output_dir, run_date=run_date)
@@ -583,6 +605,7 @@ def main() -> None:
         strategy_variant=variant_name,
         slack_review_cfg=cfg.slack_review_decision,
         committee_result=committee_result,
+        committee_comparison=committee_comparison,
     )
     post_to_slack(slack_msg)
 

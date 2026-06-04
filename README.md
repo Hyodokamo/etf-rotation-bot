@@ -331,6 +331,32 @@ python main.py --ai-audit --ai-audit-provider openai --committee --committee-mod
 - JSONLの1行が壊れても、読み取りはその行のみスキップして全体は落ちません。
 - 既存の月次レビュー判断ログ（Phase 3）とは責務を分離した **Committee専用ログ** です。
 
+### Phase 3.3: Committee Review Comparison（前回比）
+
+`logs/committee_decision_log.jsonl` の**直近2件**を比較し、前回と今回のCommittee判断の変化を構造化してレポート/Slackに表示します。**Pythonで決定的に**差分抽出し、LLMには依存しません（後付けストーリーを避けるため）。配分ロジックには一切影響しません（shadow mode 不変条件を維持）。
+
+- 有効ログが**2件未満なら比較不能として安全にスキップ**（Slackに冗長表示しない）。
+- Committee実行時、比較可能なら**自動でサマリーを生成**します。無効化したい場合は `--no-committee-comparison`。
+
+抽出する差分: Core/Satellite/Final の verdict変化、メンバー別verdict変化、ETFごとの配分増減（INCREASED/DECREASED/ADDED/REMOVED/UNCHANGED）、新規・解消された `next_review_triggers`、新規・解消された `dissenting_views`、`recommended_action` の変化。
+
+**severity（4段階）**:
+
+| severity | 例 |
+|----------|-----|
+| `MATERIAL` | final が WATCH/REJECT へ悪化 / 単一ETFが±10pt以上変化 / `allocation_override` が true（監査検知。通常は出ない） / 人間判断が TRIM/EXIT/WAIT |
+| `CAUTION` | メンバー2人以上が悪化 / Howard Marks・Rob Arnott・core_ai_auditor が WATCH以上 / 新規 dissenting_view が2件以上 / 新規 trigger が3件以上 |
+| `INFO` | 軽微なverdict変化 / 小幅な配分変動 / 少数のtrigger追加 / recommended_action変化 |
+| `NONE` | 重要な変化なし |
+
+```bash
+# 2件以上ログがあれば自動で前回比を生成（既定）
+python main.py --ai-audit --ai-audit-provider openai --committee --committee-mode shadow
+
+# 前回比を無効化
+python main.py --ai-audit --ai-audit-provider openai --committee --no-committee-comparison
+```
+
 ### 安全ルール
 
 - `allocation_override` は常に `false`（`shadow_mode` 検証で強制）

@@ -16,6 +16,13 @@ from src.committee.models import (
     MemberOutput,
     aggregate_verdict,
 )
+from src.committee.review_comparison import (
+    ReviewComparison,
+    build_comparison,
+    build_comparison_markdown,
+    build_comparison_slack_summary,
+    compare_latest_committee_runs,
+)
 from src.committee.report_formatter import (
     build_committee_markdown,
     build_committee_slack_summary,
@@ -47,4 +54,9 @@ __all__ = [
     "append_committee_decision_log",
     "build_committee_log_entry",
     "read_committee_decision_log",
+    "ReviewComparison",
+    "build_comparison",
+    "build_comparison_markdown",
+    "build_comparison_slack_summary",
+    "compare_latest_committee_runs",
 ]

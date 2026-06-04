@@ -36,6 +36,7 @@ from src.committee.decision_logger import (
     build_committee_log_entry,
 )
 from src.committee.review_comparison import compare_latest_committee_runs
+from src.committee.advisory import build_advisory
 from src.backtest import build_backtest_markdown, compare_backtest
 from src.config_loader import load_config
 from src.data_fetcher import fetch_prices
@@ -136,6 +137,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Disable the Committee Review Comparison (前回比) section even if 2+ log entries exist.",
+    )
+    parser.add_argument(
+        "--no-committee-advisory",
+        action="store_true",
+        default=False,
+        help="Disable the Committee Advisory (助言) section.",
     )
     return parser.parse_args()
 
@@ -481,6 +488,7 @@ def main() -> None:
     # committee NEVER changes final_weights — it is display-only advisory output.
     committee_result = None
     committee_comparison = None
+    committee_advisory = None
     committee_cfg = load_committee_config()
     # CLI overrides (Step 5): --committee force-enables; --committee-mode selects mode.
     if args.committee:
@@ -549,6 +557,25 @@ def main() -> None:
                 except Exception as e:
                     logger.warning(f"Committee Review Comparison skipped: {type(e).__name__}: {e}")
                     committee_comparison = None
+
+            # Phase 3.4: deterministic advisory from the structured judgment.
+            # Display-only; never changes allocation, never sizes orders.
+            if not args.no_committee_advisory:
+                try:
+                    committee_advisory = build_advisory(
+                        committee_result,
+                        comparison=committee_comparison,
+                        final_allocation=final_weights,
+                        risk_mode="risk_off" if risk_gate.risk_off else "risk_on",
+                        ai_audit_status=audit_result.status.value if audit_result else None,
+                    )
+                    logger.info(
+                        f"Committee Advisory: stance={committee_advisory.overall_stance.value} "
+                        f"action_items={len(committee_advisory.action_items)} (override=False)"
+                    )
+                except Exception as e:
+                    logger.warning(f"Committee Advisory skipped: {type(e).__name__}: {e}")
+                    committee_advisory = None
         except Exception as e:  # never break the pipeline on committee failure
             logger.warning(f"Investment Committee skipped due to error: {type(e).__name__}: {e}")
             committee_result = None
@@ -585,6 +612,7 @@ def main() -> None:
         strategy_variant=variant_name,
         committee_result=committee_result,
         committee_comparison=committee_comparison,
+        committee_advisory=committee_advisory,
     )
 
     report_path = save_report(report_text, cfg.report.output_dir, run_date=run_date)
@@ -606,6 +634,7 @@ def main() -> None:
         slack_review_cfg=cfg.slack_review_decision,
         committee_result=committee_result,
         committee_comparison=committee_comparison,
+        committee_advisory=committee_advisory,
     )
     post_to_slack(slack_msg)
 

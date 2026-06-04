@@ -27,6 +27,7 @@ def build_report(
     strategy_variant: str | None = None,
     committee_result=None,
     committee_comparison=None,
+    committee_advisory=None,
 ) -> str:
     if run_date is None:
         run_date = date.today()
@@ -317,6 +318,11 @@ def build_report(
     if committee_comparison is not None:
         from src.committee.review_comparison import build_comparison_markdown
         lines.append(build_comparison_markdown(committee_comparison))
+
+    # --- Committee Advisory (Phase 3.4, 助言, display-only) ---
+    if committee_advisory is not None:
+        from src.committee.advisory import build_advisory_markdown
+        lines.append(build_advisory_markdown(committee_advisory))
 
     # --- Warnings ---
     lines.append("## 注意事項")

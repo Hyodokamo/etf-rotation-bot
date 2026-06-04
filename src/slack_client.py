@@ -44,6 +44,7 @@ def build_slack_summary(
     slack_review_cfg=None,
     committee_result=None,
     committee_comparison=None,
+    committee_advisory=None,
 ) -> str:
     top5 = sorted(weights.items(), key=lambda x: -x[1])[:5]
     top5_str = "\n".join(f"  {t}: {w:.1%}" for t, w in top5)
@@ -112,6 +113,11 @@ def build_slack_summary(
     if committee_comparison is not None:
         from src.committee.review_comparison import build_comparison_slack_summary
         lines.append(build_comparison_slack_summary(committee_comparison))
+
+    # Phase 3.4: Committee advisory (only when available)
+    if committee_advisory is not None:
+        from src.committee.advisory import build_advisory_slack_summary
+        lines.append(build_advisory_slack_summary(committee_advisory))
 
     # Phase 3: Review decision section
     review_enabled = slack_review_cfg.enabled if slack_review_cfg is not None else True

@@ -23,6 +23,16 @@ from src.committee.review_comparison import (
     build_comparison_slack_summary,
     compare_latest_committee_runs,
 )
+from src.committee.advisory import (
+    ActionItem,
+    AdvisoryCategory,
+    AdvisoryPriority,
+    CommitteeAdvisory,
+    OverallStance,
+    build_advisory,
+    build_advisory_markdown,
+    build_advisory_slack_summary,
+)
 from src.committee.report_formatter import (
     build_committee_markdown,
     build_committee_slack_summary,
@@ -59,4 +69,12 @@ __all__ = [
     "build_comparison_markdown",
     "build_comparison_slack_summary",
     "compare_latest_committee_runs",
+    "ActionItem",
+    "AdvisoryCategory",
+    "AdvisoryPriority",
+    "CommitteeAdvisory",
+    "OverallStance",
+    "build_advisory",
+    "build_advisory_markdown",
+    "build_advisory_slack_summary",
 ]

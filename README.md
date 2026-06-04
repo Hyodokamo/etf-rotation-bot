@@ -357,6 +357,26 @@ python main.py --ai-audit --ai-audit-provider openai --committee --committee-mod
 python main.py --ai-audit --ai-audit-provider openai --committee --no-committee-comparison
 ```
 
+### Phase 3.4: Committee Advisory Mode（助言）
+
+Committeeの構造化判断（`CommitteeResult` ＋ Review Comparison ＋ `final_allocation` ＋ `risk_mode` ＋ `ai_audit_status`）から、今月の**実務的な助言**を生成します。**決定的なPythonロジック**で生成し、売買判断のLLM生成には依存しません。**配分変更・売買数量計算・自動売買は一切行いません**（`allocation_override` 常に false）。助言は「追加購入を控える」「維持を推奨」「再レビュー」「候補レビューへ回す」と表現し、「売る」「買う」を断定しません。
+
+固定スキーマ: `advisory_mode`(=`shadow_advisory`) / `overall_stance` / `action_items` / `do_not_actions` / `next_review_focus` / `generated_from` / `allocation_override`。
+
+- `overall_stance`: `ACCEPT` / `HOLD_WITH_CAUTION` / `WAIT_FOR_REVIEW` / `REDUCE_RISK_REVIEW` / `INSUFFICIENT_DATA`
+- `action_items[].category`: `BUY_DISCIPLINE` / `HOLD_DISCIPLINE` / `RISK_CONTROL` / `REVIEW_TRIGGER` / `DATA_QUALITY` / `CANDIDATE_REVIEW` / `HUMAN_DECISION_REQUIRED`
+- `action_items[].priority`: `LOW` / `MEDIUM` / `HIGH`（HIGH優先・最大5件表示）
+
+主な生成ルール: final=WATCH→`WAIT_FOR_REVIEW`、final=REJECT→`REDUCE_RISK_REVIEW`、AI監査REJECT/`core_ai_auditor` WATCH+→`DATA_QUALITY`/`HUMAN_DECISION_REQUIRED` を最優先、Rob Arnott WATCH→`BUY_DISCIPLINE`、Howard Marks WATCH→`RISK_CONTROL`、Paul Tudor Jones WATCH→`REVIEW_TRIGGER`、Druckenmiller WATCH→`CANDIDATE_REVIEW`、前回比 severity が CAUTION 以上→必ず1件以上の HIGH を含める。
+
+```bash
+# 既定で Advisory を生成
+python main.py --ai-audit --ai-audit-provider openai --committee --committee-mode shadow
+
+# Advisory を非表示（--no-committee-comparison と併用可）
+python main.py --ai-audit --ai-audit-provider openai --committee --no-committee-advisory
+```
+
 ### 安全ルール
 
 - `allocation_override` は常に `false`（`shadow_mode` 検証で強制）

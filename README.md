@@ -507,6 +507,24 @@ python main.py --candidate-stability --candidate-symbol GRID --candidate-stabili
 - 自動売買・注文生成は行わない（メンバー出力中の不適切な売買表現は検出して保留）
 - Slackボタンのインタラクティブ受信は未実装（表示専用）
 
+## Phase 5: Integrated Decision Audit Summary
+
+月次レビュー・Investment Committee・Candidate Review・Candidate Stability・Slackボタン押下・人間メモを統合し、**月次の投資判断監査サマリー**を生成します。「いつ・誰が・何を判断したか」「AI判断と人間判断がどこでズレたか」「次回何を確認すべきか」を1つのMarkdownで確認できます。**決定的なPythonロジック**（LLM非依存）。**振り返り用の監査であり売買指示ではありません**。配分変更・注文数量計算・自動売買・証券口座連携は行いません。
+
+入力（append-onlyログ）: `logs/committee_decision_log.jsonl` / `logs/candidate_review_log.jsonl` / `logs/slack_decision_log.jsonl`、および Candidate Stability（再計算）。ログ欠如・壊れた行があっても安全に処理します（秘密情報はサマリーに出しません）。
+
+出力セクション: 今月の結論 / 月次レビュー判断 / Candidate Review判断 / AI委員会 vs 人間判断 / 判断が割れた項目 / Stabilityが不安定な候補 / 人間メモ一覧 / 次回確認事項 / 安全注記。
+
+**AI vs 人間の整合判定**（candidate）: `aligned`（一致）/ `mild_divergence`（軽微なズレ）/ `divergence`（要注意のズレ）。例: AI=`REJECT_FOR_NOW` × Human=`WAIT` → divergence、AI=`WAIT_FOR_BETTER_ENTRY` × Human=`WATCHLIST` → mild_divergence、AI=`REJECT_FOR_NOW` × Human=`REJECT` → aligned。
+
+```bash
+python main.py --audit-summary                       # 当月
+python main.py --audit-summary --audit-month 2026-06 # 月指定
+python main.py --audit-summary --audit-month 2026-06 --audit-output reports/audit/decision_audit_202606.md
+```
+
+出力先（既定）: `reports/audit/decision_audit_YYYYMM.md`（`reports/` は `.gitignore` 済み）。
+
 ## 既知の制限事項・注意点
 
 - 日本円建てETF（1306.T等）と米ドル建てETFを同一スコアで比較しており、**通貨換算は行っていません**

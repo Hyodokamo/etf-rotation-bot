@@ -57,6 +57,7 @@ from src.committee.candidate_stability import (
     save_stability_report,
 )
 from src.committee.slack_digest import build_executive_digest
+from src.decision_audit import build_audit_markdown, build_decision_audit, save_audit_report
 from src.slack_actions import build_action_value
 from src.slack_publish import (
     bot_token_available,
@@ -221,6 +222,22 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Post the Candidate Stability Check summary to Slack.",
+    )
+    parser.add_argument(
+        "--audit-summary",
+        action="store_true",
+        default=False,
+        help="Generate the integrated monthly decision audit summary (retrospective only).",
+    )
+    parser.add_argument(
+        "--audit-month",
+        default=None,
+        help="Target month for the audit summary (YYYY-MM). Defaults to the run month.",
+    )
+    parser.add_argument(
+        "--audit-output",
+        default=None,
+        help="Output path for the audit summary Markdown (default: reports/audit/decision_audit_YYYYMM.md).",
     )
     return parser.parse_args()
 
@@ -512,9 +529,29 @@ def _handle_candidate_stability(args: argparse.Namespace) -> None:
     logger.info("=== Candidate Stability Check completed ===")
 
 
+def _handle_audit_summary(args: argparse.Namespace) -> None:
+    """Phase 5: integrated monthly decision audit (retrospective; reads logs only)."""
+    run_date = date.fromisoformat(args.date) if args.date else date.today()
+    month = args.audit_month or run_date.strftime("%Y-%m")
+    logger.info(f"=== Decision Audit Summary (month={month}) ===")
+
+    audit = build_decision_audit(month)
+    markdown = build_audit_markdown(audit)
+    report_path = save_audit_report(markdown, month, output_path=args.audit_output)
+
+    print(f"\nDecision audit report: {report_path}")
+    print(f"  {audit.conclusion}")
+    logger.info("=== Decision Audit Summary completed ===")
+
+
 def main() -> None:
     load_dotenv()
     args = parse_args()
+
+    # Phase 5: integrated decision audit — separate, reads logs only
+    if args.audit_summary:
+        _handle_audit_summary(args)
+        return
 
     # Phase 3: record-decision mode — no pipeline re-run
     if args.record_decision:

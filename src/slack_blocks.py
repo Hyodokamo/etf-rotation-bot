@@ -198,8 +198,13 @@ def build_candidate_action_blocks(
 ) -> list[dict]:
     """Block Kit actions for a candidate (records a decision, not an order).
 
-    The 小額検討候補 button is omitted when the candidate is UNSTABLE /
-    HUMAN_REVIEW_REQUIRED / DO_NOT_ACT_YET (the router also rejects it defensively).
+    Phase 4.1.1 visibility gating:
+      - Blocked (UNSTABLE / HUMAN_REVIEW_REQUIRED / DO_NOT_ACT_YET): hide both
+        小額検討候補 and Watchlist入り; show only 様子見 / 見送り / 再レビュー /
+        メモ追加 plus a warning.
+      - STABLE or OK_FOR_WATCHLIST: show the full set (incl. 小額検討候補).
+      - Otherwise: show Watchlist入り + 様子見/見送り/再レビュー/メモ追加 (no 小額検討候補).
+    The router still blocks 小額検討候補 at press time as a last line of defense.
     """
     from src.slack_actions import (
         BLOCK_SMALL_TEST_HANDLING,
@@ -207,18 +212,30 @@ def build_candidate_action_blocks(
         CANDIDATE_BUTTONS,
     )
 
-    block_small = (
+    blocked = (
         candidate_stability in BLOCK_SMALL_TEST_STABILITY
         or recommended_handling in BLOCK_SMALL_TEST_HANDLING
     )
-    elements = [
-        _button(aid, label, value)
-        for aid, label in CANDIDATE_BUTTONS
-        if not (aid == "candidate_small_test_candidate" and block_small)
-    ]
+    full = (not blocked) and (
+        candidate_stability == "STABLE" or recommended_handling == "OK_FOR_WATCHLIST"
+    )
+
+    def _visible(aid: str) -> bool:
+        if aid == "candidate_small_test_candidate":
+            return full
+        if aid == "candidate_watchlist":
+            return not blocked
+        return True  # 様子見 / 見送り / 再レビュー / メモ追加 are always available
+
+    elements = [_button(aid, label, value) for aid, label in CANDIDATE_BUTTONS if _visible(aid)]
+
     note = "ボタンは*判断の記録*です（売買承認・注文ではありません）。"
-    if block_small:
-        note += f"（{candidate_stability or recommended_handling} のため小額検討候補は無効）"
+    if blocked:
+        reason = candidate_stability if candidate_stability in BLOCK_SMALL_TEST_STABILITY else recommended_handling
+        note += (
+            f" 判定が不安定/要再確認（{reason}）なため、小額検討候補にはできません。"
+            "再レビューまたは様子見を選択してください。"
+        )
     return [
         {"type": "divider"},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]},

@@ -249,7 +249,7 @@ Slackボタンの押下を受信し、人間判断を **append-only** で `logs/
 - **必要な環境変数**: `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN`（Socket Mode必須）、`SLACK_SIGNING_SECRET`（将来のHTTP方式用）、`SLACK_ALLOWED_USER_IDS`（許可ユーザーのカンマ区切り。未設定なら制限なし）。トークン未設定時はインタラクティブ機能は無効です。
 - **action_id**: monthly = `monthly_review_confirmed` / `monthly_skip_this_month` / `monthly_request_rerun` / `monthly_add_note`。candidate = `candidate_watchlist` / `candidate_small_test_candidate` / `candidate_wait` / `candidate_reject` / `candidate_re_review` / `candidate_add_note`。
 - **ボタンの value** は安全なJSON（`source_type` / `run_id`・`review_id` / `candidate_symbol` / `candidate_stability` / `recommended_handling` / `generated_at`）で、APIキー・プロンプト・raw_response を含みません。
-- **小額検討候補のブロック**: `candidate_small_test_candidate` は Stability Check が `UNSTABLE` または `recommended_handling` が `HUMAN_REVIEW_REQUIRED` / `DO_NOT_ACT_YET` の候補ではブロックされます（Block Kit上はボタン非表示、押下時もルーターが拒否）。
+- **小額検討候補のブロック（Phase 4.1.1 ボタン表示ゲーティング）**: `candidate_small_test_candidate` は Stability Check が `UNSTABLE` または `recommended_handling` が `HUMAN_REVIEW_REQUIRED` / `DO_NOT_ACT_YET` の候補では、Block Kit上で **`小額検討候補` と `Watchlist入り` の両方を非表示**にし（`様子見` / `見送り` / `再レビュー` / `メモ追加` のみ表示＋警告文）、押下時もルーターが拒否します（最終防衛線）。`STABLE` または `OK_FOR_WATCHLIST` のときのみ全6ボタン（`小額検討候補` 含む）を表示。それ以外は `Watchlist入り` ＋ 4ボタン（`小額検討候補` は非表示）。
 - **冪等性**: 同一 `action_id` + `user_id` + 対象ID（run_id/review_id）の重複押下は二重記録しません。不正な action_id・壊れた value・未許可ユーザーは拒否します。
 - 押下後は即時 ack し、短い確認メッセージ（例: 「記録しました: GRID を WAIT として保存しました」）を返します。
 

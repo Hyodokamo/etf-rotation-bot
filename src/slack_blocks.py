@@ -157,3 +157,70 @@ def build_review_decision_blocks(
     })
 
     return blocks
+
+
+# ── Phase 4.1: interactive action buttons (action_id + safe JSON value) ───────
+
+
+def _button(action_id: str, label: str, value: str) -> dict:
+    return {
+        "type": "button",
+        "text": {"type": "plain_text", "text": label, "emoji": True},
+        "action_id": action_id,
+        "value": value,
+    }
+
+
+def build_monthly_action_blocks(value: str) -> list[dict]:
+    """Block Kit actions for the monthly review (records a decision, not an order)."""
+    from src.slack_actions import MONTHLY_BUTTONS
+
+    return [
+        {"type": "divider"},
+        {
+            "type": "context",
+            "elements": [{
+                "type": "mrkdwn",
+                "text": "ボタンは*判断の記録*です（売買承認ではありません）。自動売買は行いません。",
+            }],
+        },
+        {
+            "type": "actions",
+            "elements": [_button(aid, label, value) for aid, label in MONTHLY_BUTTONS],
+        },
+    ]
+
+
+def build_candidate_action_blocks(
+    value: str,
+    candidate_stability: str | None = None,
+    recommended_handling: str | None = None,
+) -> list[dict]:
+    """Block Kit actions for a candidate (records a decision, not an order).
+
+    The 小額検討候補 button is omitted when the candidate is UNSTABLE /
+    HUMAN_REVIEW_REQUIRED / DO_NOT_ACT_YET (the router also rejects it defensively).
+    """
+    from src.slack_actions import (
+        BLOCK_SMALL_TEST_HANDLING,
+        BLOCK_SMALL_TEST_STABILITY,
+        CANDIDATE_BUTTONS,
+    )
+
+    block_small = (
+        candidate_stability in BLOCK_SMALL_TEST_STABILITY
+        or recommended_handling in BLOCK_SMALL_TEST_HANDLING
+    )
+    elements = [
+        _button(aid, label, value)
+        for aid, label in CANDIDATE_BUTTONS
+        if not (aid == "candidate_small_test_candidate" and block_small)
+    ]
+    note = "ボタンは*判断の記録*です（売買承認・注文ではありません）。"
+    if block_small:
+        note += f"（{candidate_stability or recommended_handling} のため小額検討候補は無効）"
+    return [
+        {"type": "divider"},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]},
+        {"type": "actions", "elements": elements},
+    ]

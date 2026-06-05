@@ -241,6 +241,20 @@ Slack表示構成:
 
 Committee非実行時（`--no-ai-audit` 等）は従来の簡易サマリーを使用します。digest生成ヘルパ（`build_committee_debate_highlights` / `build_agent_one_liners` / `select_top_dissenting_views` / `select_top_review_triggers`）は `CommitteeResult` でもメンバー辞書リストでも動作し、将来 Candidate Review にも流用できます。
 
+## Phase 4.1: Slack Interactivity Foundation
+
+Slackボタンの押下を受信し、人間判断を **append-only** で `logs/slack_decision_log.jsonl` に記録します。**ボタンは判断の記録であり、売買承認ではありません。** 配分変更・注文数量計算・自動売買・証券口座連携は一切行いません（「買う/売る/注文/購入実行」の文言も使いません）。
+
+- **起動**: `python src/slack_interaction_handler.py`（Socket Mode 既定）。`--dry-run` でSlack非接続のpayload検証のみ。
+- **必要な環境変数**: `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN`（Socket Mode必須）、`SLACK_SIGNING_SECRET`（将来のHTTP方式用）、`SLACK_ALLOWED_USER_IDS`（許可ユーザーのカンマ区切り。未設定なら制限なし）。トークン未設定時はインタラクティブ機能は無効です。
+- **action_id**: monthly = `monthly_review_confirmed` / `monthly_skip_this_month` / `monthly_request_rerun` / `monthly_add_note`。candidate = `candidate_watchlist` / `candidate_small_test_candidate` / `candidate_wait` / `candidate_reject` / `candidate_re_review` / `candidate_add_note`。
+- **ボタンの value** は安全なJSON（`source_type` / `run_id`・`review_id` / `candidate_symbol` / `candidate_stability` / `recommended_handling` / `generated_at`）で、APIキー・プロンプト・raw_response を含みません。
+- **小額検討候補のブロック**: `candidate_small_test_candidate` は Stability Check が `UNSTABLE` または `recommended_handling` が `HUMAN_REVIEW_REQUIRED` / `DO_NOT_ACT_YET` の候補ではブロックされます（Block Kit上はボタン非表示、押下時もルーターが拒否）。
+- **冪等性**: 同一 `action_id` + `user_id` + 対象ID（run_id/review_id）の重複押下は二重記録しません。不正な action_id・壊れた value・未許可ユーザーは拒否します。
+- 押下後は即時 ack し、短い確認メッセージ（例: 「記録しました: GRID を WAIT として保存しました」）を返します。
+
+各レコードには `allocation_override: false` / `auto_trade: false` / `order_generated: false` が必ず含まれます。
+
 ### 安全ルール
 
 - 判断ログは売買実行ではありません

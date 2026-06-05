@@ -276,6 +276,16 @@ Slackボタンの押下を受信し、人間判断を **append-only** で `logs/
 - **確認応答**: 「記録しました: 月次レビューを確認済みにしました」「記録しました: GRID を様子見として保存しました」「メモを記録しました: GRID」「この候補はUNSTABLEのため、小額検討候補にはできません。再レビューまたは様子見を選択してください」。
 - **value/metadata**: 将来の元メッセージ更新に備え `channel_id` / `message_ts` を安全な value に含めます（それ以外の秘密情報は含めません）。押下時ブロック・冪等性・許可ユーザー制御は維持。
 
+## Phase 4.4: Original Message Update & Audit Trail Surfacing
+
+ボタン押下／メモ送信後、ephemeral確認に加えて**元のSlackメッセージ**にも「記録済み」ステータスを反映します（`chat.update`）。後からSlackを見ても、誰がどの判断を記録したか分かります。**表示のみ**で、**append-onlyログが主・Slack更新は副**。`chat.update` 失敗時もログ記録は維持します（取り消しません）。配分変更・注文数量計算・自動売買・証券口座連携は行いません。
+
+- ステータスblock（`block_id: committee_record_status`）を既存blocksに**追加または置換**（全文再生成しない／Digest本文を保持）。
+- 表示例: `✅ 記録済み: 月次レビュー = 確認済み by U123 at 2026-06-05 09:12` / `✅ 記録済み: GRID = 様子見 by U123 at 2026-06-05 09:15` / メモ送信時 `📝 記録済み: GRID = メモ追加 by …`、判断＋メモ併記時は末尾に `📝 メモあり`。
+- `channel_id` / `message_ts` が無い場合、または元blocksが取得できない場合は**安全にnoop**（メッセージをclobberしない）。
+- `chat.update` 呼び出しは `message_updater` で注入可能（テストでモック）。実運用は Socket Mode の `body.message.blocks` を渡して本文を保持。
+- ペイロード/メタdata/blocksに秘密情報（api_key/token/secret/prompt/raw_response）を含めません。
+
 ### 安全ルール
 
 - 判断ログは売買実行ではありません

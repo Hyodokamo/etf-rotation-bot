@@ -124,7 +124,12 @@ def _run_socket_mode() -> None:  # pragma: no cover - requires slack_bolt + netw
                 view = build_note_modal_from_action_value(value, action_id, user_id)
                 client.views_open(trigger_id=body["trigger_id"], view=view)
                 return
-            result = route_action(action_id, value, user_id, allowed_users=allowed_users)
+            original_blocks = (body.get("message") or {}).get("blocks")
+            result = route_action(
+                action_id, value, user_id, allowed_users=allowed_users,
+                original_blocks=original_blocks,
+                message_updater=lambda p: client.chat_update(**p),
+            )
             respond(text=result.message, response_type="ephemeral", replace_original=False)
         except Exception as e:  # never crash the listener
             logger.error(f"Slack action handling error: {type(e).__name__}: {e}")

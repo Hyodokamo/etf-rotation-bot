@@ -18,6 +18,7 @@ MAX_NOTE_LEN = 500
 
 _SAFE_METADATA_KEYS = {
     "source_type", "run_id", "review_id", "candidate_symbol", "action_id", "user_id",
+    "channel_id", "message_ts",
 }
 _SENSITIVE_KEY_SUBSTRINGS = (
     "api_key", "apikey", "secret", "password", "token",
@@ -40,6 +41,8 @@ def build_note_private_metadata(
     review_id: str | None = None,
     candidate_symbol: str | None = None,
     user_id: str | None = None,
+    channel_id: str | None = None,
+    message_ts: str | None = None,
 ) -> str:
     """Safe JSON private_metadata for the note modal (whitelisted keys only)."""
     payload = {
@@ -49,6 +52,8 @@ def build_note_private_metadata(
         "review_id": review_id,
         "candidate_symbol": candidate_symbol,
         "user_id": user_id,
+        "channel_id": channel_id,
+        "message_ts": message_ts,
     }
     return json.dumps(payload, ensure_ascii=False)
 
@@ -96,6 +101,8 @@ def build_note_modal_view(
     review_id: str | None = None,
     candidate_symbol: str | None = None,
     user_id: str | None = None,
+    channel_id: str | None = None,
+    message_ts: str | None = None,
 ) -> dict:
     """Build the Slack modal view payload for adding a decision note.
 
@@ -112,6 +119,7 @@ def build_note_modal_view(
     private_metadata = build_note_private_metadata(
         source_type=source_type, action_id=action_id, run_id=run_id,
         review_id=review_id, candidate_symbol=candidate_symbol, user_id=user_id,
+        channel_id=channel_id, message_ts=message_ts,
     )
 
     return {
@@ -161,4 +169,6 @@ def build_note_modal_from_action_value(value: str, action_id: str, user_id: str 
         review_id=data.get("review_id"),
         candidate_symbol=data.get("candidate_symbol"),
         user_id=user_id,
+        channel_id=data.get("channel_id"),
+        message_ts=data.get("message_ts"),
     )

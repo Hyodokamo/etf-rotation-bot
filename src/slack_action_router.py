@@ -34,6 +34,7 @@ from src.committee.candidate_decision_logger import (
     append_candidate_decision_log,
     read_candidate_decision_log,
 )
+from src.slack_message_updater import build_status_block, update_original_message
 
 _JST = timezone(timedelta(hours=9))
 
@@ -73,6 +74,24 @@ def _already_recorded(log_path, action_id, user_id, identifier) -> bool:
     return False
 
 
+def _maybe_update_message(
+    *, source_type, human_decision, user_id, now, data, symbol,
+    message_updater, original_blocks, note_present=False,
+) -> None:
+    """Best-effort original-message status update. Never raises (log is primary)."""
+    try:
+        status = build_status_block(
+            source_type=source_type, human_decision=human_decision, user_id=user_id,
+            timestamp=now, candidate_symbol=symbol, note_present=note_present,
+        )
+        update_original_message(
+            channel_id=data.get("channel_id"), message_ts=data.get("message_ts"),
+            status_block=status, existing_blocks=original_blocks, updater=message_updater,
+        )
+    except Exception as e:  # defense in depth — record already saved
+        logger.warning(f"message update skipped: {type(e).__name__}: {e}")
+
+
 def route_action(
     action_id: str,
     value: str,
@@ -81,6 +100,8 @@ def route_action(
     allowed_users: list[str] | None = None,
     log_path=DEFAULT_SLACK_LOG_PATH,
     now: str | None = None,
+    message_updater=None,
+    original_blocks: list | None = None,
 ) -> ActionResult:
     """Validate, authorize, and record a Slack button press (append-only)."""
     now = now or datetime.now(_JST).isoformat()
@@ -170,6 +191,13 @@ def route_action(
         label = CANDIDATE_DECISION_LABELS.get(human_decision, human_decision)
         message = f"記録しました: {symbol} を{label}として保存しました。"
 
+    # Phase 4.4: surface the decision on the original message (best-effort).
+    _maybe_update_message(
+        source_type=source_type, human_decision=human_decision, user_id=user_id,
+        now=now, data=data, symbol=symbol, message_updater=message_updater,
+        original_blocks=original_blocks,
+    )
+
     return ActionResult(
         ok=True, recorded=True, source_type=source_type,
         human_decision=human_decision, candidate_symbol=symbol, log_path=saved,
@@ -195,6 +223,8 @@ def route_note_submission(
     monthly_log_path=DEFAULT_SLACK_LOG_PATH,
     candidate_log_path=DEFAULT_CANDIDATE_LOG_PATH,
     now: str | None = None,
+    message_updater=None,
+    original_blocks: list | None = None,
 ) -> ActionResult:
     """Record a note-modal submission append-only (decision context, not approval)."""
     from src.slack_modals import parse_note_private_metadata, validate_note
@@ -268,6 +298,13 @@ def route_note_submission(
                                 candidate_symbol=symbol, message="既に同じメモが記録済みです。")
         saved = append_candidate_decision_log(entry, candidate_log_path)
         message = f"メモを記録しました: {symbol or review_id}"
+
+    # Phase 4.4: mark the original message as having a note (best-effort).
+    _maybe_update_message(
+        source_type=source_type, human_decision="ADD_NOTE", user_id=user_id,
+        now=now, data=meta, symbol=symbol, message_updater=message_updater,
+        original_blocks=original_blocks, note_present=True,
+    )
 
     return ActionResult(ok=True, recorded=True, source_type=source_type,
                         human_decision="ADD_NOTE", candidate_symbol=symbol,

@@ -250,6 +250,7 @@ def build_executive_digest(
     committee_advisory=None,
     committee_comparison=None,
     slack_review_cfg=None,
+    portfolio_context=None,
 ) -> str:
     """Compose the concise Slack Investment Committee digest (display-only)."""
     risk = "⚠️ リスクオフ" if risk_off else "✅ リスクオン"
@@ -333,6 +334,11 @@ def build_executive_digest(
         )
 
     lines.append("🛡️ shadow mode：配分変更なし／売買数量計算なし／自動売買なし")
+
+    # Phase 5.0.5: read-only core / AI sleeve scope (display-only).
+    if portfolio_context is not None:
+        from src.portfolio_context import build_slack_context_line
+        lines.extend(build_slack_context_line(portfolio_context))
 
     # Preserve Phase 3 monthly review-decision section.
     review_enabled = slack_review_cfg.enabled if slack_review_cfg is not None else False

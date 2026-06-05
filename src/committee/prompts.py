@@ -17,6 +17,13 @@ from functools import lru_cache
 from pathlib import Path
 
 from src.committee.models import CommitteeMemberConfig, CommitteeTier
+from src.portfolio_context import CORE_READ_ONLY_PREMISE
+
+# Phase 5.0.5: read-only core premise, prepended to every committee prompt so the
+# committee audits the user's intentional concentration rather than "fixing" it.
+_CORE_PREMISE_SECTION = (
+    "# コア資産の扱い（read-only前提）\n" + CORE_READ_ONLY_PREMISE + "\n"
+)
 
 _COMMON_MD_PATH = Path(__file__).resolve().parents[2] / "agents" / "common.md"
 
@@ -233,6 +240,8 @@ def build_batch_system_prompt(members: list[CommitteeMemberConfig]) -> str:
         "# 共通指示（全メンバーに適用）\n"
         + load_common_instruction()
         + "\n\n"
+        + _CORE_PREMISE_SECTION
+        + "\n"
         + _VERDICT_GUIDE
         + "\n# 独立性\n"
         "- 各メンバーは他メンバーの結論を参照・追従しないでください。\n"
@@ -266,6 +275,8 @@ def build_member_system_prompt(member: CommitteeMemberConfig, tier: CommitteeTie
         "# 共通指示\n"
         + load_common_instruction()
         + "\n\n"
+        + _CORE_PREMISE_SECTION
+        + "\n"
         + _VERDICT_GUIDE
         + f"\n# あなたの役割（{tier.value} committee / member_id: {member.member_id}）\n"
         + _persona(member)

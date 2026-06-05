@@ -26,6 +26,12 @@ from src.committee.models import CommitteeConfig, CommitteeVerdict, _SEVERITY
 from src.committee.runner import run_committee
 from src.llm.base import BaseLlmClient
 from src.logger import logger
+from src.portfolio_context import (
+    PortfolioContext,
+    build_committee_read_only_instruction,
+    detect_core_overlap,
+    to_committee_context,
+)
 
 REQUIRED_COLUMNS = [
     "symbol", "name", "asset_type", "theme", "candidate_action",
@@ -175,6 +181,7 @@ def build_candidate_context(
     portfolio_holdings: dict[str, float] | None = None,
     universe_categories: dict[str, str] | None = None,
     price_trend: dict | None = None,
+    portfolio_context: PortfolioContext | None = None,
 ) -> dict:
     """Build the committee context for a single candidate (no allocation change)."""
     holdings = portfolio_holdings or {}
@@ -186,14 +193,25 @@ def build_candidate_context(
         theme_like and any(c in _THEME_CATEGORIES for c in held_categories)
     )
 
-    return {
+    # Phase 5.0.5: read-only core overlap (intentional concentration audit).
+    core_overlap = None
+    if portfolio_context is not None:
+        warning = detect_core_overlap(candidate.theme, portfolio_context, candidate.symbol)
+        if warning is not None:
+            core_overlap = warning.model_dump(mode="json")
+
+    instruction = (
+        "これは新規/追加候補の買付可否レビューです。月次運用レビューより厳しく審査してください。"
+        "テーマ集中・既存ポートフォリオとの重複・価格トレンド・高値掴みリスク・長期保有に耐える仮説・"
+        "見直し条件・反証条件を必ず評価してください。配分変更や注文数量は扱いません。"
+        "intended_amount_jpy は検討額であり、株数には変換しません。"
+    )
+    if portfolio_context is not None:
+        instruction += " " + build_committee_read_only_instruction(portfolio_context)
+
+    ctx: dict = {
         "review_type": "candidate_new_buy_review",
-        "instruction": (
-            "これは新規/追加候補の買付可否レビューです。月次運用レビューより厳しく審査してください。"
-            "テーマ集中・既存ポートフォリオとの重複・価格トレンド・高値掴みリスク・長期保有に耐える仮説・"
-            "見直し条件・反証条件を必ず評価してください。配分変更や注文数量は扱いません。"
-            "intended_amount_jpy は検討額であり、株数には変換しません。"
-        ),
+        "instruction": instruction,
         "candidate": {
             "symbol": candidate.symbol,
             "name": candidate.name,
@@ -214,6 +232,11 @@ def build_candidate_context(
         },
         "price_trend": price_trend,
     }
+    if portfolio_context is not None:
+        ctx["core_portfolio_context"] = to_committee_context(portfolio_context)
+        if core_overlap is not None:
+            ctx["core_overlap_warning"] = core_overlap
+    return ctx
 
 
 # ── verdict mapping (stricter than monthly) ──────────────────────────────────
@@ -289,13 +312,18 @@ def review_candidate(
     portfolio_holdings: dict[str, float] | None = None,
     universe_categories: dict[str, str] | None = None,
     price_trend: dict | None = None,
+    portfolio_context: PortfolioContext | None = None,
     review_date: str | None = None,
     ai_audit_status: str | None = None,
 ) -> CandidateReviewResult:
     """Run the committee on one candidate and assemble an advisory-only result."""
     review_date = review_date or date.today().isoformat()
-    context = build_candidate_context(candidate, portfolio_holdings, universe_categories, price_trend)
+    context = build_candidate_context(
+        candidate, portfolio_holdings, universe_categories, price_trend,
+        portfolio_context=portfolio_context,
+    )
     overlap = context["portfolio_overlap"]
+    core_overlap = context.get("core_overlap_warning")
 
     committee_result = run_committee(context, committee_cfg, client, ai_audit_status=ai_audit_status)
     members = committee_result.members
@@ -317,6 +345,9 @@ def review_candidate(
         detail = "同一銘柄を保有中" if overlap["symbol_in_portfolio"] else \
             f"既存テーマ/成長株と重複の可能性（{', '.join(overlap['existing_holding_categories'])}）"
         risks.insert(0, f"既存ポートフォリオとの重複: {detail}")
+    # Phase 5.0.5: read-only core overlap (intentional concentration audit).
+    if core_overlap and core_overlap.get("overlaps_with"):
+        risks.insert(0, f"コア資産との重複注意: {core_overlap.get('reason')}")
     risks = risks[:8]
 
     required_checks = _dedup(
@@ -375,6 +406,7 @@ def review_watchlist(
     portfolio_holdings: dict[str, float] | None = None,
     universe_categories: dict[str, str] | None = None,
     price_trends: dict[str, dict] | None = None,
+    portfolio_context: PortfolioContext | None = None,
     review_date: str | None = None,
     ai_audit_status: str | None = None,
 ) -> list[CandidateReviewResult]:
@@ -386,6 +418,7 @@ def review_watchlist(
             portfolio_holdings=portfolio_holdings,
             universe_categories=universe_categories,
             price_trend=price_trends.get(c.symbol),
+            portfolio_context=portfolio_context,
             review_date=review_date,
             ai_audit_status=ai_audit_status,
         ))

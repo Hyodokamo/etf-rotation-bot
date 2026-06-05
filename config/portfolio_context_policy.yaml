@@ -1,0 +1,57 @@
+# Phase 5.0.5: Core Portfolio Read-Only Context / AI Sleeve Separation
+#
+# 全資産は「最適化対象」ではなく read-only のリスク文脈として参照する。
+# コア資産(S&P500 / FANG+ / NASDAQ100 等)は意図した長期の偏りであり、
+# Bot は売却・是正提案の主対象にしない。Bot の主対象は別枠の 100 万円 AI 検証枠。
+total_portfolio_policy:
+  enabled: true
+  # 全資産をBotに最適化させない。
+  do_not_optimize_total_portfolio: true
+  # コア資産は参照専用。配分変更・売却提案の主対象にしない。
+  core_assets_are_read_only: true
+  purpose: "全資産はリスク把握のために参照する。売却・是正提案の主対象にしない。"
+
+core_manual_policy:
+  # ユーザーが意図して受け入れている集中。Botはこれを自動で是正しない。
+  accepted_concentration:
+    - sp500
+    - fang_plus
+    - nasdaq100
+    - us_large_growth
+  review_frequency: quarterly
+  review_purpose:
+    - concentration_risk
+    - drawdown_tolerance
+    - thesis_break_conditions
+    - overlap_with_ai_sleeve
+
+ai_sleeve_policy:
+  enabled: true
+  total_budget_jpy: 1000000
+  current_cash_jpy: 1000000
+  current_invested_jpy: 0
+  # 初回投入は最大25万円程度を上限とする方針。
+  max_initial_deployment_jpy: 250000
+  max_monthly_deployment_jpy: 250000
+  default_account: taxable
+  nisa_use_policy: "NISAは長期確信がある場合のみ。頻繁な売買・検証ローテーションの主戦場にしない。"
+  purpose: "既存コア資産と重複しすぎない形で、攻めの候補を検証する。"
+
+overlap_policy:
+  # AI検証枠が既存コアと同じリスクを無自覚に積み増していないかを確認する。
+  warn_if_ai_sleeve_adds_same_risk_as_core: true
+  high_overlap_themes:
+    - nasdaq100
+    - fang_plus
+    - mega_cap_growth
+    - ai_software
+    - semiconductor
+  preferred_diversifying_themes:
+    - smart_grid
+    - infrastructure
+    - energy
+    - uranium
+    - quality
+    - value
+    - managed_futures
+    - cash_buffer

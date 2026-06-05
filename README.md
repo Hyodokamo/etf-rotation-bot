@@ -255,6 +255,17 @@ Slackボタンの押下を受信し、人間判断を **append-only** で `logs/
 
 各レコードには `allocation_override: false` / `auto_trade: false` / `order_generated: false` が必ず含まれます。
 
+### Phase 4.2: Slack Note Modal
+
+`メモ追加`（`monthly_add_note` / `candidate_add_note`）ボタン押下で **判断メモ用モーダル**を開き、`human_note` を入力して既存ログに **append-only** で記録します。**メモは判断の補足であり、売買承認ではありません**（モーダル内に「買う/売る/注文」の文言なし）。配分変更・注文数量計算・自動売買・証券口座連携は行いません。
+
+- モーダル: title「判断メモ」/ submit「記録」/ close「キャンセル」/ 複数行入力（上限500文字）。空欄は記録しません（拒否）。500字超は切り詰めます。
+- `private_metadata` は安全なJSON（`source_type` / `run_id` / `review_id` / `candidate_symbol` / `action_id` / `user_id`）。秘密情報を含まず、壊れていれば拒否します。
+- 記録先: 月次メモ → `logs/slack_decision_log.jsonl`（`run_id` 必須）、Candidateメモ → `logs/candidate_review_log.jsonl`（`review_id` または `candidate_symbol` 必須）。`entry_type: "note"` / `human_decision: "ADD_NOTE"` で保存。
+- 許可ユーザー制御・冪等性（同一 action+user+対象+メモ本文は二重記録なし）を適用します。
+
+`src/slack_modals.py` の `build_note_modal_view` は月次・Candidate 共通で使い回せます。
+
 ### 安全ルール
 
 - 判断ログは売買実行ではありません

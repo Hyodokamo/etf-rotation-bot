@@ -29,6 +29,11 @@ from src.slack_actions import (
     read_slack_decision_log,
     source_for_action,
 )
+from src.committee.candidate_decision_logger import (
+    DEFAULT_CANDIDATE_LOG_PATH,
+    append_candidate_decision_log,
+    read_candidate_decision_log,
+)
 
 _JST = timezone(timedelta(hours=9))
 
@@ -167,3 +172,100 @@ def route_action(
         human_decision=human_decision, candidate_symbol=symbol, log_path=saved,
         message=message,
     )
+
+
+def _note_already_recorded(entries, action_id, user_id, target_id, note) -> bool:
+    for e in entries:
+        if (e.get("entry_type") == "note" and e.get("action_id") == action_id
+                and e.get("user_id") == user_id and e.get("target_id") == target_id
+                and e.get("human_note") == note):
+            return True
+    return False
+
+
+def route_note_submission(
+    private_metadata: str,
+    human_note: str,
+    user_id: str,
+    *,
+    allowed_users: list[str] | None = None,
+    monthly_log_path=DEFAULT_SLACK_LOG_PATH,
+    candidate_log_path=DEFAULT_CANDIDATE_LOG_PATH,
+    now: str | None = None,
+) -> ActionResult:
+    """Record a note-modal submission append-only (decision context, not approval)."""
+    from src.slack_modals import parse_note_private_metadata, validate_note
+
+    now = now or datetime.now(_JST).isoformat()
+
+    # 1) user allowlist
+    if allowed_users is not None and user_id not in allowed_users:
+        logger.warning(f"Slack note submission from unallowed user: {user_id}")
+        return ActionResult(ok=False, message="この操作は許可されていません。")
+
+    # 2) parse private_metadata (rejects malformed / secrets)
+    try:
+        meta = parse_note_private_metadata(private_metadata)
+    except ValueError:
+        return ActionResult(ok=False, message="メモのメタデータが不正です。")
+
+    source_type = meta.get("source_type")
+    if source_type not in (SOURCE_MONTHLY, SOURCE_CANDIDATE):
+        return ActionResult(ok=False, message="source_type が不正です。")
+
+    # 3) required identifiers
+    run_id = meta.get("run_id")
+    review_id = meta.get("review_id")
+    symbol = meta.get("candidate_symbol")
+    if source_type == SOURCE_MONTHLY and not run_id:
+        return ActionResult(ok=False, message="run_id が必要です。")
+    if source_type == SOURCE_CANDIDATE and not (review_id or symbol):
+        return ActionResult(ok=False, message="review_id または candidate_symbol が必要です。")
+
+    # 4) validate note (strip / non-empty / truncate to 500)
+    try:
+        note = validate_note(human_note)
+    except ValueError:
+        return ActionResult(ok=False, source_type=source_type, message="メモが空です。記録しません。")
+
+    action_id = meta.get("action_id") or (
+        "monthly_add_note" if source_type == SOURCE_MONTHLY else "candidate_add_note"
+    )
+    target_id = run_id if source_type == SOURCE_MONTHLY else (review_id or symbol)
+
+    entry = {
+        "schema_version": SLACK_DECISION_SCHEMA_VERSION,
+        "timestamp": now,
+        "entry_type": "note",
+        "source_type": source_type,
+        "action_id": action_id,
+        "human_decision": "ADD_NOTE",
+        "human_note": note,
+        "user_id": user_id,
+        "target_id": target_id,
+        "run_id": run_id,
+        "review_id": review_id,
+        "candidate_symbol": symbol,
+        "allocation_override": False,
+        "auto_trade": False,
+        "order_generated": False,
+    }
+
+    if source_type == SOURCE_MONTHLY:
+        existing = read_slack_decision_log(monthly_log_path)
+        if _note_already_recorded(existing, action_id, user_id, target_id, note):
+            return ActionResult(ok=True, recorded=False, duplicate=True, source_type=source_type,
+                                message="既に同じメモが記録済みです。")
+        saved = append_slack_decision_log(entry, monthly_log_path)
+        message = "記録しました: 月次レビューに判断メモを追加しました。"
+    else:
+        existing = read_candidate_decision_log(candidate_log_path)
+        if _note_already_recorded(existing, action_id, user_id, target_id, note):
+            return ActionResult(ok=True, recorded=False, duplicate=True, source_type=source_type,
+                                candidate_symbol=symbol, message="既に同じメモが記録済みです。")
+        saved = append_candidate_decision_log(entry, candidate_log_path)
+        message = f"記録しました: {symbol or review_id} に判断メモを追加しました。"
+
+    return ActionResult(ok=True, recorded=True, source_type=source_type,
+                        human_decision="ADD_NOTE", candidate_symbol=symbol,
+                        log_path=saved, message=message)

@@ -266,6 +266,16 @@ Slackボタンの押下を受信し、人間判断を **append-only** で `logs/
 
 `src/slack_modals.py` の `build_note_modal_view` は月次・Candidate 共通で使い回せます。
 
+## Phase 4.3: Slack Action Blocks Production Wiring & Confirmation
+
+月次Digest / Candidate Review のSlack投稿に**実際のアクションボタン**を添付し、押下・メモ送信後に短い ephemeral 確認応答を返します。**ボタンは判断記録であり売買承認ではありません**（「買う/売る/注文/購入実行」の文言なし）。配分変更・注文数量計算・自動売買・証券口座連携は行いません。
+
+- **配信**: `SLACK_BOT_TOKEN` ＋ `SLACK_CHANNEL_ID` がある場合は Bot Token（`chat.postMessage`）でボタン付き投稿。無い場合は従来の Incoming Webhook でボタンなし送信し、warning を出します（既存送信は非破壊）。
+- **月次ボタン**: 確認済み / 今月は見送り / 再レビュー / メモ追加。
+- **Candidateボタン**: Watchlist入り / 小額検討候補 / 様子見 / 見送り / 再レビュー / メモ追加。`recommended_handling` が `DO_NOT_ACT_YET` / `HUMAN_REVIEW_REQUIRED`（または `candidate_stability=UNSTABLE`）の場合は `小額検討候補`・`Watchlist入り` を非表示（表示ゲーティング）。Candidate Review投稿では `candidate_verdict` から handling を導出（`REJECT_FOR_NOW`/`INSUFFICIENT_DATA` は買い系ボタン非表示、`APPROVE_SMALL_TEST_BUY` は全表示）。
+- **確認応答**: 「記録しました: 月次レビューを確認済みにしました」「記録しました: GRID を様子見として保存しました」「メモを記録しました: GRID」「この候補はUNSTABLEのため、小額検討候補にはできません。再レビューまたは様子見を選択してください」。
+- **value/metadata**: 将来の元メッセージ更新に備え `channel_id` / `message_ts` を安全な value に含めます（それ以外の秘密情報は含めません）。押下時ブロック・冪等性・許可ユーザー制御は維持。
+
 ### 安全ルール
 
 - 判断ログは売買実行ではありません

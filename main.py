@@ -57,6 +57,13 @@ from src.committee.candidate_stability import (
     save_stability_report,
 )
 from src.committee.slack_digest import build_executive_digest
+from src.slack_actions import build_action_value
+from src.slack_publish import (
+    bot_token_available,
+    build_candidate_review_blocks,
+    build_monthly_digest_blocks,
+    post_committee_message,
+)
 from src.backtest import build_backtest_markdown, compare_backtest
 from src.config_loader import load_config
 from src.data_fetcher import fetch_prices
@@ -444,8 +451,32 @@ def _handle_candidate_review(args: argparse.Namespace) -> None:
             logger.warning(f"Candidate decision log skipped for {r.candidate.get('symbol')}: {type(e).__name__}: {e}")
 
     if args.candidate_review_slack:
-        slack_text = "\n\n".join(build_candidate_slack_summary(r) for r in results)
-        post_to_slack("*Candidate Review*\n\n" + slack_text)
+        channel = os.environ.get("SLACK_CHANNEL_ID", "").strip() or None
+        if bot_token_available() and channel:
+            # Phase 4.3: one message per candidate with verdict-derived button gating.
+            # (Full stability gating is available via the Phase 3.7 stability check.)
+            _verdict_to_handling = {
+                "APPROVE_SMALL_TEST_BUY": "OK_FOR_WATCHLIST",   # full button set
+                "REJECT_FOR_NOW": "DO_NOT_ACT_YET",             # hide buy-ish buttons
+                "INSUFFICIENT_DATA": "HUMAN_REVIEW_REQUIRED",   # hide buy-ish buttons
+            }
+            for r in results:
+                handling = _verdict_to_handling.get(r.candidate_verdict.value)
+                summary = build_candidate_slack_summary(r)
+                action_value = build_action_value(
+                    source_type="candidate_review",
+                    review_id=r.review_id,
+                    candidate_symbol=r.candidate.get("symbol"),
+                    recommended_handling=handling,
+                    channel_id=channel,
+                )
+                blocks = build_candidate_review_blocks(
+                    summary, action_value, recommended_handling=handling, interactive=True,
+                )
+                post_committee_message(summary, blocks, channel)
+        else:
+            slack_text = "\n\n".join(build_candidate_slack_summary(r) for r in results)
+            post_to_slack("*Candidate Review*\n\n" + slack_text)
 
     print(f"\nCandidate Review report: {report_path}")
     for r in results:
@@ -861,7 +892,20 @@ def main() -> None:
             committee_comparison=committee_comparison,
             committee_advisory=committee_advisory,
         )
-    post_to_slack(slack_msg)
+
+    # Phase 4.3: attach Monthly Review action buttons (Bot Token) when available;
+    # otherwise fall back to the Incoming Webhook (text only).
+    if committee_result is not None and bot_token_available():
+        channel = os.environ.get("SLACK_CHANNEL_ID", "").strip() or None
+        action_value = build_action_value(
+            source_type="monthly_review",
+            run_id=run_date.isoformat(),
+            channel_id=channel,
+        )
+        digest_blocks = build_monthly_digest_blocks(slack_msg, action_value, interactive=True)
+        post_committee_message(slack_msg, digest_blocks, channel)
+    else:
+        post_to_slack(slack_msg)
 
     _save_run_log(
         str(audit_output_dir),

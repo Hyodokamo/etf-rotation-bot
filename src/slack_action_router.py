@@ -122,7 +122,8 @@ def route_action(
                 ok=True, blocked=True, recorded=False, source_type=source_type,
                 candidate_symbol=symbol, human_decision=None,
                 message=(
-                    f"この候補は{reason}のため、小額検討候補にはできません。再レビューを選んでください。"
+                    f"この候補は{reason}のため、小額検討候補にはできません。"
+                    "再レビューまたは様子見を選択してください。"
                 ),
             )
 
@@ -165,7 +166,9 @@ def route_action(
         }
         message = msg_map.get(human_decision, f"記録しました: {human_decision}")
     else:
-        message = f"記録しました: {symbol} を {human_decision} として保存しました。"
+        from src.slack_actions import CANDIDATE_DECISION_LABELS
+        label = CANDIDATE_DECISION_LABELS.get(human_decision, human_decision)
+        message = f"記録しました: {symbol} を{label}として保存しました。"
 
     return ActionResult(
         ok=True, recorded=True, source_type=source_type,
@@ -257,14 +260,14 @@ def route_note_submission(
             return ActionResult(ok=True, recorded=False, duplicate=True, source_type=source_type,
                                 message="既に同じメモが記録済みです。")
         saved = append_slack_decision_log(entry, monthly_log_path)
-        message = "記録しました: 月次レビューに判断メモを追加しました。"
+        message = "メモを記録しました: 月次レビュー"
     else:
         existing = read_candidate_decision_log(candidate_log_path)
         if _note_already_recorded(existing, action_id, user_id, target_id, note):
             return ActionResult(ok=True, recorded=False, duplicate=True, source_type=source_type,
                                 candidate_symbol=symbol, message="既に同じメモが記録済みです。")
         saved = append_candidate_decision_log(entry, candidate_log_path)
-        message = f"記録しました: {symbol or review_id} に判断メモを追加しました。"
+        message = f"メモを記録しました: {symbol or review_id}"
 
     return ActionResult(ok=True, recorded=True, source_type=source_type,
                         human_decision="ADD_NOTE", candidate_symbol=symbol,

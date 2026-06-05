@@ -56,9 +56,24 @@ CANDIDATE_BUTTONS = [
 BLOCK_SMALL_TEST_STABILITY = {"UNSTABLE"}
 BLOCK_SMALL_TEST_HANDLING = {"HUMAN_REVIEW_REQUIRED", "DO_NOT_ACT_YET"}
 
+# Japanese labels for confirmation messages (decision record wording only).
+MONTHLY_DECISION_LABELS = {
+    "REVIEW_CONFIRMED": "確認済み",
+    "SKIP_THIS_MONTH": "今月は見送り",
+    "REQUEST_RERUN": "再レビュー",
+}
+CANDIDATE_DECISION_LABELS = {
+    "WATCHLIST": "Watchlist入り",
+    "SMALL_TEST_BUY_CANDIDATE": "小額検討候補",
+    "WAIT": "様子見",
+    "REJECT": "見送り",
+    "RE_REVIEW": "再レビュー",
+}
+
 _SAFE_VALUE_KEYS = {
     "source_type", "run_id", "review_id", "candidate_symbol",
     "candidate_stability", "recommended_handling", "generated_at",
+    "channel_id", "message_ts",
 }
 _SENSITIVE_KEY_SUBSTRINGS = (
     "api_key", "apikey", "secret", "password", "token",
@@ -108,8 +123,14 @@ def build_action_value(
     candidate_stability: str | None = None,
     recommended_handling: str | None = None,
     generated_at: str | None = None,
+    channel_id: str | None = None,
+    message_ts: str | None = None,
 ) -> str:
-    """Build the safe JSON value carried by a Slack button (no secrets)."""
+    """Build the safe JSON value carried by a Slack button (no secrets).
+
+    channel_id / message_ts are safe routing identifiers kept for a future
+    original-message update; no other Slack context is included.
+    """
     payload = {
         "source_type": source_type,
         "run_id": run_id,
@@ -118,6 +139,8 @@ def build_action_value(
         "candidate_stability": candidate_stability,
         "recommended_handling": recommended_handling,
         "generated_at": generated_at or _now_jst_iso(),
+        "channel_id": channel_id,
+        "message_ts": message_ts,
     }
     # only whitelisted keys -> inherently free of secrets/prompts/raw responses
     return json.dumps(payload, ensure_ascii=False)

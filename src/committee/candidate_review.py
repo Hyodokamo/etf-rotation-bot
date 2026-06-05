@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from src.committee.models import CommitteeConfig, CommitteeVerdict, _SEVERITY
 from src.committee.runner import run_committee
+from src.etf_master import EtfMasterEntry, build_enrichment, get_entry
 from src.llm.base import BaseLlmClient
 from src.logger import logger
 from src.portfolio_context import (
@@ -114,6 +115,16 @@ class CandidateReviewResult(BaseModel):
     sizing_note: str = ""
     final_advisory: str = ""
     allocation_override: bool = False
+    # Phase 5.0: ETF master enrichment (read-only).
+    etf_master_known: bool = True
+    universe_status: str = ""
+    review_role: str = ""
+    review_frequency: str = ""
+    needs_order_screen_check: bool = False
+    data_quality_status: str = ""
+    data_quality_warning: str = ""
+    agent_affinity: list[str] = Field(default_factory=list)
+    agent_concern: list[str] = Field(default_factory=list)
 
     @field_validator("allocation_override")
     @classmethod
@@ -182,6 +193,7 @@ def build_candidate_context(
     universe_categories: dict[str, str] | None = None,
     price_trend: dict | None = None,
     portfolio_context: PortfolioContext | None = None,
+    etf_master: dict[str, EtfMasterEntry] | None = None,
 ) -> dict:
     """Build the committee context for a single candidate (no allocation change)."""
     holdings = portfolio_holdings or {}
@@ -208,6 +220,17 @@ def build_candidate_context(
     )
     if portfolio_context is not None:
         instruction += " " + build_committee_read_only_instruction(portfolio_context)
+
+    # Phase 5.0: ETF master enrichment (hints only; never a filter).
+    enrichment = None
+    if etf_master is not None:
+        enrichment = build_enrichment(get_entry(etf_master, candidate.symbol))
+        instruction += (
+            " agent_affinity/agent_concern は評価対象の制限ではなく賛成/反対論点生成の補助です。"
+            "全メンバーが全ETFを独立に評価してください。"
+            "data_quality_status が needs_*/insufficient の場合、AI Auditor(core_ai_auditor) は"
+            "データ品質警告を出してください。"
+        )
 
     ctx: dict = {
         "review_type": "candidate_new_buy_review",
@@ -236,6 +259,8 @@ def build_candidate_context(
         ctx["core_portfolio_context"] = to_committee_context(portfolio_context)
         if core_overlap is not None:
             ctx["core_overlap_warning"] = core_overlap
+    if enrichment is not None:
+        ctx["etf_master_metadata"] = enrichment
     return ctx
 
 
@@ -313,6 +338,7 @@ def review_candidate(
     universe_categories: dict[str, str] | None = None,
     price_trend: dict | None = None,
     portfolio_context: PortfolioContext | None = None,
+    etf_master: dict[str, EtfMasterEntry] | None = None,
     review_date: str | None = None,
     ai_audit_status: str | None = None,
 ) -> CandidateReviewResult:
@@ -320,10 +346,11 @@ def review_candidate(
     review_date = review_date or date.today().isoformat()
     context = build_candidate_context(
         candidate, portfolio_holdings, universe_categories, price_trend,
-        portfolio_context=portfolio_context,
+        portfolio_context=portfolio_context, etf_master=etf_master,
     )
     overlap = context["portfolio_overlap"]
     core_overlap = context.get("core_overlap_warning")
+    enrichment = context.get("etf_master_metadata")
 
     committee_result = run_committee(context, committee_cfg, client, ai_audit_status=ai_audit_status)
     members = committee_result.members
@@ -348,10 +375,22 @@ def review_candidate(
     # Phase 5.0.5: read-only core overlap (intentional concentration audit).
     if core_overlap and core_overlap.get("overlaps_with"):
         risks.insert(0, f"コア資産との重複注意: {core_overlap.get('reason')}")
+    # Phase 5.0: ETF master data-quality warning (AI Auditor concern).
+    data_quality_warning = ""
+    if enrichment and enrichment.get("data_quality_needs_warning"):
+        data_quality_warning = enrichment.get("data_quality_note", "")
+        risks.insert(0, f"データ品質警告(AI Auditor): {data_quality_warning}")
     risks = risks[:8]
 
+    extra_checks = []
+    if enrichment and enrichment.get("data_quality_needs_warning"):
+        extra_checks.append(
+            f"データ品質の裏取り（data_quality_status={enrichment.get('data_quality_status')}）")
+    if enrichment and enrichment.get("needs_order_screen_check"):
+        extra_checks.append("発注前のブローカー取扱い・最新費用の注文画面確認")
     required_checks = _dedup(
-        MANDATORY_THEME_CHECKS + [c for m in members for c in m.required_checks], cap=12
+        MANDATORY_THEME_CHECKS + extra_checks
+        + [c for m in members for c in m.required_checks], cap=12
     )
 
     sym = candidate.symbol
@@ -395,6 +434,15 @@ def review_candidate(
         sizing_note=sizing_note,
         final_advisory=_FINAL_ADVISORY[verdict],
         allocation_override=False,
+        etf_master_known=bool(enrichment.get("known_in_master")) if enrichment else True,
+        universe_status=enrichment.get("universe_status", "") if enrichment else "",
+        review_role=enrichment.get("review_role", "") if enrichment else "",
+        review_frequency=enrichment.get("review_frequency", "") if enrichment else "",
+        needs_order_screen_check=bool(enrichment.get("needs_order_screen_check")) if enrichment else False,
+        data_quality_status=enrichment.get("data_quality_status", "") if enrichment else "",
+        data_quality_warning=data_quality_warning,
+        agent_affinity=enrichment.get("agent_affinity_hint", []) if enrichment else [],
+        agent_concern=enrichment.get("agent_concern_hint", []) if enrichment else [],
     )
 
 
@@ -407,6 +455,7 @@ def review_watchlist(
     universe_categories: dict[str, str] | None = None,
     price_trends: dict[str, dict] | None = None,
     portfolio_context: PortfolioContext | None = None,
+    etf_master: dict[str, EtfMasterEntry] | None = None,
     review_date: str | None = None,
     ai_audit_status: str | None = None,
 ) -> list[CandidateReviewResult]:
@@ -419,6 +468,7 @@ def review_watchlist(
             universe_categories=universe_categories,
             price_trend=price_trends.get(c.symbol),
             portfolio_context=portfolio_context,
+            etf_master=etf_master,
             review_date=review_date,
             ai_audit_status=ai_audit_status,
         ))
@@ -495,6 +545,15 @@ def build_candidate_markdown(results: list[CandidateReviewResult], review_date: 
         lines.append(f"- 検討額（注文数量ではない）: {c.get('intended_amount_jpy_consideration_only')} / 口座: {c.get('account')}")
         lines.append(f"- **candidate_verdict:** {icon} `{r.candidate_verdict.value}`（確信度 {r.confidence:.0%}）")
         lines.append(f"- allocation_override: `{str(r.allocation_override).lower()}`")
+        if r.universe_status:
+            role = f"{r.review_role}（{r.review_frequency}）" if r.review_role else r.review_frequency
+            known = "" if r.etf_master_known else " ⚠️ ETF Master未登録（unknown metadata）"
+            lines.append(f"- ユニバース区分: `{r.universe_status}` / {role}{known}")
+        if r.needs_order_screen_check:
+            lines.append("")
+            lines.append("> ⚠️ **発注前確認要**：ブローカー取扱い・最新費用等を注文画面で必ず確認（自動発注は行いません）")
+        if r.data_quality_warning:
+            lines.append(f"- 🔍 データ品質警告: {r.data_quality_warning}")
         lines.append("")
         lines.append(f"**最も強い買い根拠:** {r.strongest_buy_thesis or '—'}")
         lines.append("")
@@ -556,10 +615,15 @@ def build_candidate_slack_summary(result: CandidateReviewResult) -> str:
     c = result.candidate
     icon = _VERDICT_ICON.get(result.candidate_verdict, "")
     top_risk = result.key_risks[0] if result.key_risks else "—"
-    return "\n".join([
+    lines = [
         f"*Candidate Review: {c['symbol']}* {icon} {result.candidate_verdict.value}",
         f"買い根拠: {result.strongest_buy_thesis[:120] or '—'}",
         f"主リスク: {top_risk}",
         f"助言: {result.final_advisory}",
-        "🛡️ shadow: 助言のみ・配分変更/数量計算なし",
-    ])
+    ]
+    if result.needs_order_screen_check:
+        lines.append("⚠️ 発注前確認要（注文画面でブローカー取扱い・最新費用を確認）")
+    if result.data_quality_warning:
+        lines.append(f"🔍 データ品質警告: data_quality_status={result.data_quality_status}")
+    lines.append("🛡️ shadow: 助言のみ・配分変更/数量計算なし")
+    return "\n".join(lines)

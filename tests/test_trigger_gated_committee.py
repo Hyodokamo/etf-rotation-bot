@@ -193,8 +193,10 @@ def test_trigger_gated_slack_summary_zero_counts():
     """build_signal_digest_text with zero counts → no committee line (backward compat)."""
     from src.signals.slack_signal_digest import build_signal_digest_text
 
-    text = build_signal_digest_text(results=[], committee_target_count=0, skipped_count=0)
-    # No committee summary section when both are 0
+    text = build_signal_digest_text(
+        results=[], committee_target_count=0, skipped_count=0, global_only_skipped_count=0,
+    )
+    # No committee summary section when all are 0
     assert "本日Committee実行対象" not in text
 
 
@@ -210,11 +212,12 @@ def test_parse_committee_counts_found_in_stderr():
         exit_code=0,
         duration_seconds=1.0,
         stdout_summary="[DRY-RUN] Signal Report...",
-        stderr_summary="[COMMITTEE] target=5 skipped=2\n",
+        stderr_summary="[COMMITTEE] target=5 skipped=2 global_only=3\n",
     )
-    target, skipped = _parse_committee_counts(step)
+    target, skipped, global_only = _parse_committee_counts(step)
     assert target == 5
     assert skipped == 2
+    assert global_only == 3
 
 
 def test_parse_committee_counts_found_in_stdout_fallback():
@@ -226,31 +229,47 @@ def test_parse_committee_counts_found_in_stdout_fallback():
         command="main.py --crash-signal-check",
         exit_code=0,
         duration_seconds=1.0,
-        stdout_summary="[COMMITTEE] target=7 skipped=1\nOK",
+        stdout_summary="[COMMITTEE] target=7 skipped=1 global_only=2\nOK",
         stderr_summary="",
     )
-    target, skipped = _parse_committee_counts(step)
+    target, skipped, global_only = _parse_committee_counts(step)
     assert target == 7
     assert skipped == 1
+    assert global_only == 2
+
+
+def test_parse_committee_counts_backward_compat_2field():
+    """Old 2-field [COMMITTEE] format still parses (global_only defaults to 0)."""
+    from src.signals.scheduler_log import StepLog
+    from scripts.daily_signal_check import _parse_committee_counts
+
+    step = StepLog(
+        command="cmd", exit_code=0, duration_seconds=1.0,
+        stderr_summary="[COMMITTEE] target=4 skipped=1\n",
+    )
+    target, skipped, global_only = _parse_committee_counts(step)
+    assert target == 4
+    assert skipped == 1
+    assert global_only == 0
 
 
 def test_parse_committee_counts_not_found():
-    """_parse_committee_counts returns (0, 0) when line not present."""
+    """_parse_committee_counts returns (0, 0, 0) when line not present."""
     from src.signals.scheduler_log import StepLog
     from scripts.daily_signal_check import _parse_committee_counts
 
     step = StepLog(command="cmd", exit_code=0, duration_seconds=1.0)
-    assert _parse_committee_counts(step) == (0, 0)
+    assert _parse_committee_counts(step) == (0, 0, 0)
 
     step2 = StepLog(
         command="cmd", exit_code=0, duration_seconds=1.0,
         stdout_summary="no committee line here", stderr_summary="also none",
     )
-    assert _parse_committee_counts(step2) == (0, 0)
+    assert _parse_committee_counts(step2) == (0, 0, 0)
 
 
 def test_parse_committee_counts_in_run_log(tmp_path):
-    """run_daily_signal_check parses committee counts from step stderr into RunLog."""
+    """run_daily_signal_check parses all 3 committee counts into RunLog."""
     from src.signals.scheduler_log import RunStatus, StepLog
     from scripts.daily_signal_check import parse_args, run_daily_signal_check
 
@@ -260,7 +279,7 @@ def test_parse_committee_counts_in_run_log(tmp_path):
                 command=" ".join(cmd),
                 exit_code=0,
                 duration_seconds=1.0,
-                stderr_summary="[COMMITTEE] target=3 skipped=4\n",
+                stderr_summary="[COMMITTEE] target=3 skipped=1 global_only=6\n",
             )
         return StepLog(command=" ".join(cmd), exit_code=0, duration_seconds=0.5)
 
@@ -269,5 +288,6 @@ def test_parse_committee_counts_in_run_log(tmp_path):
     log = run_daily_signal_check(args, log_path=log_path, _run_step_fn=fake_step)
 
     assert log.committee_target_count == 3
-    assert log.skipped_count == 4
+    assert log.skipped_count == 1
+    assert log.global_only_skipped_count == 6
     assert log.status == RunStatus.SUCCESS

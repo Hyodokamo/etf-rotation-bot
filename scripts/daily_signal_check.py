@@ -209,12 +209,13 @@ def run_daily_signal_check(
     finished_at = datetime.now().isoformat()
     overall_status = determine_status(step_logs)
 
-    # Phase 6.1: parse committee counts from crash signal step (reads stderr_summary)
+    # Phase 6.1.1: parse committee counts from crash signal step (reads stderr_summary)
     committee_target_count = 0
     skipped_count = 0
+    global_only_skipped_count = 0
     for sl in step_logs:
         if "--crash-signal-check" in sl.command:
-            committee_target_count, skipped_count = _parse_committee_counts(sl)
+            committee_target_count, skipped_count, global_only_skipped_count = _parse_committee_counts(sl)
             break
 
     log = RunLog(
@@ -227,6 +228,7 @@ def run_daily_signal_check(
         no_order_quantity=True,
         committee_target_count=committee_target_count,
         skipped_count=skipped_count,
+        global_only_skipped_count=global_only_skipped_count,
     )
 
     try:
@@ -240,19 +242,26 @@ def run_daily_signal_check(
     return log
 
 
-def _parse_committee_counts(step_log: StepLog) -> tuple[int, int]:
-    """Extract committee_target_count and skipped_count from a crash signal StepLog.
+def _parse_committee_counts(step_log: StepLog) -> tuple[int, int, int]:
+    """Extract committee_target_count, skipped_count, global_only_skipped_count.
 
-    main.py writes [COMMITTEE] target=N skipped=M to stderr (not stdout, which is
-    dominated by logger output and gets truncated). Check stderr_summary first,
-    then stdout_summary as fallback.
-    Returns (0, 0) if not found.
+    main.py writes to stderr:
+        [COMMITTEE] target=N skipped=M global_only=K
+
+    Check stderr_summary first (primary), then stdout_summary as fallback.
+    Backward-compat: old 2-field format returns global_only=0.
+    Returns (0, 0, 0) if not found.
     """
     for text in (step_log.stderr_summary, step_log.stdout_summary):
+        # Phase 6.1.1: 3-field format
+        m = re.search(r'\[COMMITTEE\] target=(\d+) skipped=(\d+) global_only=(\d+)', text)
+        if m:
+            return int(m.group(1)), int(m.group(2)), int(m.group(3))
+        # Phase 6.1 backward-compat: 2-field format
         m = re.search(r'\[COMMITTEE\] target=(\d+) skipped=(\d+)', text)
         if m:
-            return int(m.group(1)), int(m.group(2))
-    return 0, 0
+            return int(m.group(1)), int(m.group(2)), 0
+    return 0, 0, 0
 
 
 def _print(text: str) -> None:

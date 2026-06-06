@@ -62,12 +62,25 @@ class SignalsEnumConfig(BaseModel):
     )
 
 
+class CommitteeGateConfig(BaseModel):
+    """Phase 6.1.1: Committee gate — separates global vs symbol-specific triggers."""
+    require_symbol_specific_trigger: bool = True
+    allow_global_panic_full_scan: bool = False
+    min_symbol_daily_drop_pct: float = -3.0
+    min_symbol_5d_drop_pct: float = -5.0
+    min_symbol_20d_drop_pct: float = -8.0
+    min_symbol_drawdown_from_high_pct: float = -10.0
+    rsi_oversold_threshold: float = 35.0
+    volume_spike_threshold: float = 1.5
+
+
 class SignalConfig(BaseModel):
     market_triggers: MarketTriggerConfig = Field(default_factory=MarketTriggerConfig)
     theme_triggers: ThemeTriggerConfig = Field(default_factory=ThemeTriggerConfig)
     candidate_rules: CandidateRulesConfig = Field(default_factory=CandidateRulesConfig)
     ai_sleeve_rules: AiSleeveRulesConfig = Field(default_factory=AiSleeveRulesConfig)
     signals: SignalsEnumConfig = Field(default_factory=SignalsEnumConfig)
+    committee_gate: CommitteeGateConfig = Field(default_factory=CommitteeGateConfig)
 
 
 def load_signal_config(

@@ -88,6 +88,8 @@ def build_signal_digest_text(
     as_of_date: str | None = None,
     committee_target_count: int = 0,
     skipped_count: int = 0,
+    global_only_skipped_count: int = 0,
+    global_triggers: list[str] | None = None,
 ) -> str:
     """Build a Slack-ready Signal Digest from Crash Signal results.
 
@@ -101,7 +103,9 @@ def build_signal_digest_text(
         reference_symbols: symbols that are market_reference (default: SPY/QQQ/SOXX/SMH).
         as_of_date: display date string (YYYY-MM-DD).
         committee_target_count: number of symbols that had LLM committee run today.
-        skipped_count: number of symbols skipped by trigger gate (no triggers).
+        skipped_count: number of symbols skipped (no triggers at all).
+        global_only_skipped_count: symbols skipped because only global market triggers fired.
+        global_triggers: global market trigger labels that fired today (e.g. SPY急落).
 
     Returns:
         Slack mrkdwn-ready digest string. Never empty.
@@ -137,12 +141,17 @@ def build_signal_digest_text(
     lines.append(f"*AI検証枠 Signal Digest — {today}*")
     lines.append("")
 
-    # ── Committee execution summary (Phase 6.1) ────────────────────────────────
-    if committee_target_count > 0 or skipped_count > 0:
+    # ── Committee execution summary (Phase 6.1 / 6.1.1) ──────────────────────
+    total_processed = committee_target_count + skipped_count + global_only_skipped_count
+    if total_processed > 0:
         lines.append(
             f"本日Committee実行対象: {committee_target_count}件 / "
-            f"スキップ: {skipped_count}件（急落トリガーなし）"
+            f"グローバルのみスキップ: {global_only_skipped_count}件 / "
+            f"トリガーなしスキップ: {skipped_count}件"
         )
+        if global_triggers:
+            gt_str = " / ".join(global_triggers[:5])
+            lines.append(f"グローバルトリガー: {gt_str}")
         lines.append("")
 
     # ── Summary conclusion ────────────────────────────────────────────────────

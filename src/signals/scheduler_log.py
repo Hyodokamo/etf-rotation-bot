@@ -57,8 +57,9 @@ class RunLog:
     steps: list[StepLog]
     no_auto_trade: bool = True
     no_order_quantity: bool = True
-    committee_target_count: int = 0  # symbols that had LLM committee run
-    skipped_count: int = 0           # symbols skipped (no triggers, trigger-gate mode)
+    committee_target_count: int = 0      # symbols that had LLM committee run
+    skipped_count: int = 0               # symbols skipped (no triggers at all)
+    global_only_skipped_count: int = 0   # symbols with global triggers only (no symbol-specific entry)
 
     def to_dict(self) -> dict:
         d = asdict(self)

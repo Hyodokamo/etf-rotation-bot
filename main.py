@@ -836,7 +836,11 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
     from src.signals.signal_engine import aggregate_signal
     from src.signals.signal_models import SignalSide
     from src.signals.signal_report import build_signal_markdown, save_signal_report
-    from src.signals.trigger_gate import make_deterministic_no_action, symbol_has_triggers
+    from src.signals.trigger_gate import (
+        make_deterministic_global_only,
+        should_run_committee,
+        symbol_has_triggers,
+    )
     from src.signals.watchlist_store import (
         append_signal_history,
         load_watchlist,
@@ -911,7 +915,11 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
 
     results = []
     committee_target_count = 0
-    skipped_count = 0
+    skipped_count = 0           # no triggers at all
+    global_only_skipped_count = 0  # global triggers only, no symbol-specific entry
+
+    gate_cfg = signal_cfg.committee_gate
+
     for symbol in symbols:
         try:
             ctx = build_signal_context(
@@ -919,11 +927,18 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
                 portfolio_context=portfolio_ctx,
                 reference_only=is_market_reference(symbol, roles),
             )
-            # Phase 6.1: skip LLM committee when no triggers and trigger-gate is active
-            if committee_on_trigger_only and not symbol_has_triggers(ctx):
-                result = make_deterministic_no_action(symbol, signal_side, ctx)
-                skipped_count += 1
-                logger.info(f"  {symbol}: NO_ACTION (trigger-gate: no triggers, committee skipped)")
+            # Phase 6.1.1: refined trigger gate
+            if committee_on_trigger_only and not should_run_committee(ctx, gate_cfg):
+                from src.signals.trigger_gate import has_global_market_trigger
+                result = make_deterministic_global_only(symbol, signal_side, ctx)
+                if has_global_market_trigger(ctx):
+                    global_only_skipped_count += 1
+                    logger.info(
+                        f"  {symbol}: WATCH (trigger-gate: global-only, no symbol-specific entry)"
+                    )
+                else:
+                    skipped_count += 1
+                    logger.info(f"  {symbol}: NO_ACTION (trigger-gate: no triggers)")
             else:
                 members = run_signal_committee(ctx, committee_cfg, client=llm_client)
                 result = aggregate_signal(symbol, signal_side, members, ctx, signal_cfg, portfolio_ctx)
@@ -940,7 +955,11 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
 
     # Parseable committee count line → stderr (stdout is dominated by log/report output).
     # daily_signal_check.py reads this from StepLog.stderr_summary.
-    sys.stderr.write(f"[COMMITTEE] target={committee_target_count} skipped={skipped_count}\n")
+    sys.stderr.write(
+        f"[COMMITTEE] target={committee_target_count} "
+        f"skipped={skipped_count} "
+        f"global_only={global_only_skipped_count}\n"
+    )
     sys.stderr.flush()
 
     if not dry_run and results:
@@ -961,6 +980,8 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
             as_of_date=str(run_date),
             committee_target_count=committee_target_count,
             skipped_count=skipped_count,
+            global_only_skipped_count=global_only_skipped_count,
+            global_triggers=triggers or None,
         )
         if dry_run:
             sys.stdout.buffer.write(b"\n[SIGNAL-SLACK] Digest (dry-run - not posted to Slack)\n\n")

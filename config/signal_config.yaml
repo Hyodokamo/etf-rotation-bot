@@ -49,3 +49,13 @@ signals:
     - HIGH_PRIORITY_CANDIDATE
     - HOLD_OFF
     - REJECT_FOR_NOW
+
+committee_gate:
+  require_symbol_specific_trigger: true
+  allow_global_panic_full_scan: false
+  min_symbol_daily_drop_pct: -3.0
+  min_symbol_5d_drop_pct: -5.0
+  min_symbol_20d_drop_pct: -8.0
+  min_symbol_drawdown_from_high_pct: -10.0
+  rsi_oversold_threshold: 35
+  volume_spike_threshold: 1.5

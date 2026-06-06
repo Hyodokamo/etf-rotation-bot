@@ -29,16 +29,22 @@ def build_signal_markdown(
     signals: list[SignalResult],
     market_regime: str = "neutral",
     as_of_date: str | None = None,
+    scenario_name: str | None = None,
 ) -> str:
     today = as_of_date or date.today().isoformat()
     lines: list[str] = []
-    lines.append(f"# Daily Signal Report — {today}")
+    title = f"# Daily Signal Report — {today}"
+    if scenario_name:
+        title += f" [scenario: {scenario_name}]"
+    lines.append(title)
     lines.append("")
     lines.append(
         "> 助言専用：実注文・注文数量計算・自動売買・証券口座連携は行いません。"
         "最終判断は人間が行います。"
     )
     lines.append(f"> 市場レジーム: **{market_regime}**")
+    if scenario_name:
+        lines.append(f"> **シナリオ:** `{scenario_name}`")
     lines.append("")
 
     if not signals:

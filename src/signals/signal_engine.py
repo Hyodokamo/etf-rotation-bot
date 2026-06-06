@@ -141,7 +141,13 @@ def aggregate_signal(
         # No crash/correction signals → WATCH at most
         final_signal = FinalSignal.WATCH if total_score >= 2 else FinalSignal.NO_ACTION
         watchlist_update = "WATCH" if final_signal == FinalSignal.WATCH else None
-    elif total_score < 0 or reject_count >= 3:
+    elif any("data_quality=insufficient" in f for f in signal_ctx.skeptic_flags):
+        # Insufficient data is a hard block regardless of committee score
+        risk_flags.append("data_quality=insufficient → BUY_CANDIDATE以上をブロック")
+        final_signal = FinalSignal.REJECT_FOR_NOW
+        watchlist_update = None
+    elif total_score <= -5 or reject_count >= 4:
+        # Recalibrated: deep negative score or strong rejection majority
         final_signal = FinalSignal.REJECT_FOR_NOW
         watchlist_update = None
     elif (
@@ -156,12 +162,35 @@ def aggregate_signal(
     ):
         final_signal = FinalSignal.BUY_CANDIDATE
         watchlist_update = "BUY_CANDIDATE"
+    elif total_score < 0 or cautious_count >= 4:
+        # Cautious committee but not outright rejection — wait and see
+        final_signal = FinalSignal.HOLD_OFF
+        watchlist_update = None
     elif total_score >= 1 or cautious_count <= 2:
         final_signal = FinalSignal.WATCH
         watchlist_update = "WATCH"
     else:
         final_signal = FinalSignal.HOLD_OFF
         watchlist_update = None
+
+    # ── Post-score downgrade for overlap / existing holdings ──────────────────
+    if final_signal in (FinalSignal.BUY_CANDIDATE, FinalSignal.HIGH_PRIORITY_CANDIDATE):
+        existing_related = signal_ctx.portfolio_context_summary.get("existing_related_holdings", [])
+        has_existing_holding = symbol.upper() in [s.upper() for s in existing_related]
+        overlap_very_high = any("コア重複=very_high" in f for f in signal_ctx.skeptic_flags)
+
+        if overlap_very_high:
+            risk_flags.append("expected_overlap_with_core=very_high → 一段降格 HOLD_OFF")
+            final_signal = FinalSignal.HOLD_OFF
+            watchlist_update = None
+        elif has_existing_holding:
+            risk_flags.append("existing_related_holdings → 一段降格")
+            if final_signal == FinalSignal.HIGH_PRIORITY_CANDIDATE:
+                final_signal = FinalSignal.BUY_CANDIDATE
+                watchlist_update = "BUY_CANDIDATE"
+            else:
+                final_signal = FinalSignal.WATCH
+                watchlist_update = "WATCH"
 
     return SignalResult(
         symbol=symbol,

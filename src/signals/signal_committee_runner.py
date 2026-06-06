@@ -66,16 +66,24 @@ Output a JSON array with one object per member in this exact format:
     "score": <integer -2 to +2>,
     "confidence": <0.0 to 1.0>,
     "rationale": "<concrete Japanese reason, 1-2 sentences>",
-    "dissenting_view": "<strongest objection to buying this ETF now>",
+    "dissenting_view": "<strongest objection to adding this ETF to the Watchlist now>",
     "risk_flags": ["<flag>"],
-    "veto": <true only for ai_auditor on data_quality=insufficient or rule violations>,
+    "veto": <true ONLY when core_ai_auditor detects data_quality_status=insufficient>,
     "next_review_triggers": ["<trigger>"]
   }
 ]
+スコアの意味（Watchlist候補化の評価であり、実注文指示ではない）:
+- score=+2 (positive): このETFは今Watchlist候補として強く支持できる
+- score=+1 (positive): Watchlist候補として支持できる、条件付き
+- score=0 (neutral): 中立的、どちらともいえない
+- score=-1 (cautious): もっと確認してからWatchlist候補化したい（「もっとデータが欲しい」という意味）
+- score=-2 (reject): このETFは今Watchlist候補にすべきでない（テーマ崩壊・構造的問題）
 Rules:
+- BUY_CANDIDATE = Watchlist候補化の推薦であり、実注文指示ではない。最終判断は人間が行う。
+- needs_order_screen_check や data_quality=needs_broker_check はrisk_flagsに記載し、スコアを下げる理由にしない
+- veto=true は data_quality_status=insufficient の場合のみ設定する（broker_check や通常リスクは veto 対象外）
 - score: positive>=1, neutral=0, cautious<=-1, reject=-2
 - No 買え/売れ/注文/購入実行/売却実行 wording
-- BUY_CANDIDATE = Watchlist候補化, not an actual order
 - SELL signal is reserved; do not generate SELL output
 - Do not fabricate data not in the signal context
 - Do not propose selling core_manual/satellite_legacy/existing_related_holdings
@@ -97,7 +105,12 @@ def _build_signal_batch_prompt(
         "# コア資産の扱い（read-only前提）\n"
         f"{CORE_READ_ONLY_PREMISE}\n\n"
         "# 重要なルール\n"
-        "- BUY_CANDIDATEは買付指示ではなく、Watchlist候補化の評価です\n"
+        "- BUY_CANDIDATE = 人間によるWatchlist候補化の推薦であり、実注文指示ではありません\n"
+        "  → 急落・押し目で「今Watchlistに追加する価値があるか」を評価してください\n"
+        "  → 「買付を指示するリスクがある」という理由でスコアを下げないでください\n"
+        "- needs_order_screen_check や data_quality=needs_broker_check はリスクフラグ扱いです\n"
+        "  → これらはスコア(-1)の理由ではなく、risk_flagsに記載してください\n"
+        "- veto=true は data_quality_status=insufficient の場合のみ有効です\n"
         "- 注文数量・自動売買・証券口座連携は一切行いません\n"
         "- SELL シグナルは今回MVPでは実装されません（reserved）\n"
         "- core_manual / satellite_legacy / existing_related_holdings の売却提案をしない\n"

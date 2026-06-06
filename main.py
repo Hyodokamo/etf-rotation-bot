@@ -322,6 +322,15 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Dry-run: generate signals in memory only; do not write watchlist or history files.",
     )
+    parser.add_argument(
+        "--market-data-file",
+        default=None,
+        dest="market_data_file",
+        help=(
+            "Path to market data CSV to use instead of data/market_data_latest.csv. "
+            "Useful for synthetic crash scenario testing."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -731,7 +740,11 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
     )
 
     signal_cfg = load_signal_config("config/signal_config.yaml")
-    market_data = load_market_data(DEFAULT_MARKET_DATA_PATH)
+    market_data_file = getattr(args, "market_data_file", None) or DEFAULT_MARKET_DATA_PATH
+    market_data = load_market_data(market_data_file)
+    scenario_name = Path(market_data_file).stem if market_data_file != DEFAULT_MARKET_DATA_PATH else None
+    if scenario_name:
+        logger.info(f"Using market data scenario: {scenario_name} ({market_data_file})")
 
     triggers = detect_crash_triggers(market_data, signal_cfg)
     logger.info(f"Global crash triggers detected: {triggers or '(none)'}")
@@ -812,7 +825,7 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
     elif any("急落" in t or "暴落" in t for t in triggers):
         first_ctx_regime = "crash"
 
-    markdown = build_signal_markdown(results, market_regime=first_ctx_regime)
+    markdown = build_signal_markdown(results, market_regime=first_ctx_regime, scenario_name=scenario_name)
 
     if dry_run:
         print("\n[DRY-RUN] Signal Report (in-memory only; no files written)\n")

@@ -119,7 +119,7 @@ def detect_crash_triggers(
         if dd is not None and dd <= tt.semiconductor_drawdown_from_high_pct:
             triggers.append(f"{name}高値比下落({dd:.1f}%)")
 
-    if symbol:
+    if symbol and symbol.upper() not in ("SOXX", "SMH"):
         sym_row = market_data.get(symbol.upper(), {})
         if sym_row:
             d = _num(sym_row, "daily_return_pct")
@@ -129,4 +129,11 @@ def detect_crash_triggers(
             if dd is not None and dd <= tt.theme_drawdown_from_high_pct:
                 triggers.append(f"{symbol.upper()}高値比下落({dd:.1f}%)")
 
-    return triggers
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for t in triggers:
+        if t not in seen:
+            seen.add(t)
+            unique.append(t)
+    return unique

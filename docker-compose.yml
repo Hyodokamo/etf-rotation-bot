@@ -1,0 +1,50 @@
+services:
+  etf-bot:
+    build: .
+    # Load all secrets/keys from .env (never baked into the image)
+    env_file: .env
+    environment:
+      TZ: Asia/Tokyo
+    # Persist runtime state outside the container image.
+    # data/   — watchlist.csv, market_data_latest.csv, etf_master.csv, personal CSVs
+    # logs/   — scheduler_run_log.jsonl, signal_history.csv, decision logs
+    # reports/— daily_signal_report.md, audit reports
+    # outputs/— monthly reports, bot.log, committee JSON
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+      - ./outputs:/app/outputs
+    # Safe default: dry-run signal check without Slack.
+    # Override with `docker compose run --rm etf-bot <args>` for ad-hoc runs.
+    # --allow-watchlist-update is intentionally absent — watchlist.csv not modified by default.
+    command: ["python", "scripts/daily_signal_check.py", "--no-slack"]
+
+  # ── Future services (Phase 7.1+) ─────────────────────────────────────────────
+  # Uncomment when Slack command router and job runner are implemented.
+  #
+  # slack-bot:
+  #   build: .
+  #   env_file: .env
+  #   environment:
+  #     TZ: Asia/Tokyo
+  #   volumes:
+  #     - ./data:/app/data
+  #     - ./logs:/app/logs
+  #     - ./reports:/app/reports
+  #     - ./outputs:/app/outputs
+  #   command: ["python", "src/slack_interaction_handler.py"]
+  #   restart: unless-stopped
+  #
+  # job-runner:
+  #   build: .
+  #   env_file: .env
+  #   environment:
+  #     TZ: Asia/Tokyo
+  #   volumes:
+  #     - ./data:/app/data
+  #     - ./logs:/app/logs
+  #     - ./reports:/app/reports
+  #     - ./outputs:/app/outputs
+  #   command: ["python", "src/job_runner.py"]
+  #   restart: unless-stopped

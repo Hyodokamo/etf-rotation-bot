@@ -183,6 +183,15 @@ class PortfolioContext(BaseModel):
     ai_sleeve: AiSleeveState = Field(default_factory=AiSleeveState)
 
     @property
+    def existing_related_holdings(self) -> list[PortfolioHolding]:
+        """Existing NISA/related holdings (e.g. BOTZ/GRID) — read-only reference.
+
+        These are tracked separately from the freely-traded ¥1M AI sleeve and are
+        NEVER auto-summed into the sleeve invested amount.
+        """
+        return list(self.ai_sleeve_invested)
+
+    @property
     def core_themes(self) -> list[str]:
         seen: list[str] = []
         for h in self.core_manual:
@@ -256,20 +265,35 @@ def load_portfolio_context_policy(
 # ── budget / state ─────────────────────────────────────────────────────────────
 
 
+def _num(row: dict, *names: str) -> float | None:
+    for n in names:
+        v = row.get(n)
+        if v is None or str(v).strip() == "":
+            continue
+        try:
+            return float(str(v).replace(",", "").replace("円", "").strip())
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def load_ai_sleeve_state(
     path: str | Path = DEFAULT_AI_SLEEVE_STATE_PATH,
 ) -> dict | None:
-    """Load the AI sleeve state CSV (state reference only — never order quantity).
+    """Load the AI sleeve state CSV — the source of truth for the ¥1M sleeve.
 
-    Single-row schema: ``as_of_date,total_budget_jpy,current_cash_jpy,current_invested_jpy``
-    (extra columns tolerated). Missing/empty file -> ``None``. Only present numeric
-    keys are returned, so callers fall back to the policy for anything absent.
+    Recommended single-row schema (extra columns such as ``sleeve_name`` tolerated)::
+
+        as_of_date,total_budget_jpy,cash_jpy,invested_jpy,default_account,notes
+
+    Legacy ``current_cash_jpy`` / ``current_invested_jpy`` names are also accepted.
+    Missing/empty file -> ``None`` (caller falls back to policy + warns). State
+    reference only: never used to compute order quantity.
     """
     p = Path(path)
     if not p.exists():
-        logger.info(f"AI sleeve state not found (using policy defaults): {p}")
+        logger.warning(f"AI sleeve state not found; using policy defaults: {p}")
         return None
-    keys = ("total_budget_jpy", "current_cash_jpy", "current_invested_jpy")
     try:
         with open(p, encoding="utf-8-sig", newline="") as f:
             row = next(csv.DictReader(f), None)
@@ -277,16 +301,21 @@ def load_ai_sleeve_state(
         logger.warning(f"AI sleeve state read failed; using policy defaults: {e}")
         return None
     if not row:
+        logger.warning(f"AI sleeve state empty; using policy defaults: {p}")
         return None
     out: dict = {}
-    for k in keys:
-        v = row.get(k)
-        if v is None or str(v).strip() == "":
-            continue
-        try:
-            out[k] = float(str(v).replace(",", "").strip())
-        except (TypeError, ValueError):
-            continue
+    tb = _num(row, "total_budget_jpy")
+    cash = _num(row, "cash_jpy", "current_cash_jpy")
+    inv = _num(row, "invested_jpy", "current_invested_jpy")
+    if tb is not None:
+        out["total_budget_jpy"] = tb
+    if cash is not None:
+        out["current_cash_jpy"] = cash
+    if inv is not None:
+        out["current_invested_jpy"] = inv
+    acct = (row.get("default_account") or "").strip()
+    if acct:
+        out["default_account"] = acct
     return out or None
 
 
@@ -297,28 +326,15 @@ def compute_ai_sleeve_state(
 ) -> AiSleeveState:
     """Compute the ¥1M AI sleeve budget state (read-only; never order quantity).
 
-    Precedence per field: ``ai_sleeve_state.csv`` override > snapshot ``ai_sleeve_*``
-    rows > policy. ``total_budget_jpy`` is a budget decision (override > policy).
+    Precedence per field: ``ai_sleeve_state.csv`` override > policy. The snapshot's
+    ``ai_sleeve_invested`` rows (e.g. existing NISA BOTZ/GRID) are **NOT** summed
+    into the sleeve invested — they are read-only ``existing_related_holdings``.
+    ``holdings`` is accepted for signature stability but not used for the budget.
     """
     sleeve = policy.ai_sleeve_policy
     override = state_override or {}
-    cash_rows = [h for h in holdings if h.scope == SCOPE_AI_SLEEVE_CASH]
-    invested_rows = [h for h in holdings if h.scope == SCOPE_AI_SLEEVE_INVESTED]
-
-    if "current_cash_jpy" in override:
-        current_cash = override["current_cash_jpy"]
-    elif cash_rows:
-        current_cash = sum(h.market_value_jpy for h in cash_rows)
-    else:
-        current_cash = sleeve.current_cash_jpy
-
-    if "current_invested_jpy" in override:
-        current_invested = override["current_invested_jpy"]
-    elif invested_rows:
-        current_invested = sum(h.market_value_jpy for h in invested_rows)
-    else:
-        current_invested = sleeve.current_invested_jpy
-
+    current_cash = override.get("current_cash_jpy", sleeve.current_cash_jpy)
+    current_invested = override.get("current_invested_jpy", sleeve.current_invested_jpy)
     total_budget = override.get("total_budget_jpy", sleeve.total_budget_jpy)
 
     if total_budget > 0:
@@ -460,6 +476,7 @@ def to_committee_context(context: PortfolioContext) -> dict:
         },
         "ai_sleeve": {
             "is_bot_target": True,
+            "source_of_truth": "ai_sleeve_state.csv",
             "total_budget_jpy": s.total_budget_jpy,
             "current_cash_jpy": s.current_cash_jpy,
             "current_invested_jpy": s.current_invested_jpy,
@@ -468,9 +485,21 @@ def to_committee_context(context: PortfolioContext) -> dict:
             "max_initial_deployment_jpy": s.max_initial_deployment_jpy,
             "nisa_use_policy": context.policy.ai_sleeve_policy.nisa_use_policy,
         },
+        "existing_related_holdings": {
+            "read_only": True,
+            "is_sell_or_rebalance_target": False,
+            "not_summed_into_ai_sleeve": True,
+            "symbols": [h.symbol for h in context.existing_related_holdings],
+            "note": (
+                "既存NISA保有等の関連保有。read-only参照であり、AI検証枠の投資済み額には"
+                "合算しない。売却・是正提案の主対象にしない。"
+            ),
+        },
         "review_purpose": context.policy.core_manual_policy.review_purpose,
         "do_not": [
             "コア資産の売却・是正提案を出さない",
+            "既存関連保有(BOTZ/GRID等)の売却・是正提案を出さない",
+            "既存関連保有をAI検証枠の投資済み額に合算しない",
             "コア資産の配分を変更しない",
             "全資産を最適化しない",
             "注文数量を計算しない",
@@ -482,36 +511,59 @@ def to_committee_context(context: PortfolioContext) -> dict:
 def build_slack_context_line(context: PortfolioContext) -> list[str]:
     """Short Slack lines describing the read-only core / AI sleeve scope."""
     s = context.ai_sleeve
-    return [
+    lines = [
         "*🧭 ポートフォリオ文脈（read-only）:*",
         f"• 全資産コア資産: read-only（売却・是正提案の対象外） / コア{len(context.core_manual)}件",
-        (f"• AI検証枠: 予算{int(s.total_budget_jpy):,}円 / "
+        (f"• AI検証枠(ai_sleeve_state.csv基準): 予算{int(s.total_budget_jpy):,}円 / "
          f"現金{int(s.current_cash_jpy):,}円 / 投資済み{int(s.current_invested_jpy):,}円"),
         f"• 初回投入上限: 約{int(s.max_initial_deployment_jpy):,}円（方針）",
-        "• 今回の判断はAI検証枠が対象であり、全資産の売却・是正提案ではない",
     ]
+    related = context.existing_related_holdings
+    if related:
+        syms = ", ".join(h.symbol for h in related)
+        lines.append(f"• 既存関連保有(read-only・AI検証枠に合算しない): {syms}")
+    lines.append("• 今回の判断はAI検証枠が対象であり、全資産・既存保有の売却・是正提案ではない")
+    return lines
 
 
 def build_portfolio_context_markdown(context: PortfolioContext) -> list[str]:
     """Markdown lines describing the read-only core / AI sleeve scope (header banner)."""
     s = context.ai_sleeve
-    return [
+    lines = [
         "> 🧭 **ポートフォリオ文脈（read-only）**",
         f"> - 全資産コア資産(core_manual): **read-only**（売却・是正提案の主対象にしません） / コア{len(context.core_manual)}件",
-        (f"> - AI検証枠(ai_sleeve): 予算 {int(s.total_budget_jpy):,}円 / "
+        (f"> - AI検証枠(ai_sleeve・ai_sleeve_state.csv基準): 予算 {int(s.total_budget_jpy):,}円 / "
          f"現金 {int(s.current_cash_jpy):,}円 / 投資済み {int(s.current_invested_jpy):,}円"
          f"（cash {s.cash_ratio:.0%} / invested {s.invested_ratio:.0%}）"),
         f"> - 初回投入上限: 約{int(s.max_initial_deployment_jpy):,}円（方針）",
-        "> - 今回の判断はAI検証枠が対象であり、全資産の売却・是正提案ではありません",
     ]
+    related = context.existing_related_holdings
+    if related:
+        syms = ", ".join(h.symbol for h in related)
+        lines.append(
+            f"> - 既存関連保有(existing_related_holdings): **read-only** / {syms}"
+            "（既存NISA保有等。AI検証枠の投資済み額には合算せず、売却・是正提案の主対象にしません）"
+        )
+    lines.append("> - 今回の判断はAI検証枠が対象であり、全資産・既存保有の売却・是正提案ではありません")
+    return lines
 
 
 def build_audit_context_notes(context: PortfolioContext) -> list[str]:
     """Lines appended to the Decision Audit safety section."""
     s = context.ai_sleeve
-    return [
+    notes = [
         "- core_manual（コア資産）は read-only。売却・是正提案の主対象にしません。",
-        f"- Bot管理対象はAI検証枠(ai_sleeve)のみ：予算{int(s.total_budget_jpy):,}円 "
+        f"- Bot管理対象はAI検証枠(ai_sleeve)のみ（ai_sleeve_state.csv基準）：予算{int(s.total_budget_jpy):,}円 "
         f"/ 現金{int(s.current_cash_jpy):,}円 / 投資済み{int(s.current_invested_jpy):,}円。",
-        "- AI判断と人間判断のズレは、AI検証枠内の判断として扱います（全資産の売却提案ではありません）。",
     ]
+    related = context.existing_related_holdings
+    if related:
+        syms = ", ".join(h.symbol for h in related)
+        notes.append(
+            f"- 既存関連保有({syms})は read-only。AI検証枠の投資済み額には合算せず、"
+            "売却・是正提案の主対象にしません。"
+        )
+    notes.append(
+        "- AI判断と人間判断のズレは、AI検証枠内の判断として扱います（全資産・既存保有の売却提案ではありません）。"
+    )
+    return notes

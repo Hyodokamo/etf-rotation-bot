@@ -74,7 +74,9 @@ def _write_policy(tmp_path):
 
 
 def _context(tmp_path, rows=_SAMPLE_ROWS) -> PortfolioContext:
-    return load_portfolio_context(_write_snapshot(tmp_path, rows), _write_policy(tmp_path))
+    # Explicit non-existent sleeve-state path keeps this hermetic (no real CSV).
+    return load_portfolio_context(_write_snapshot(tmp_path, rows), _write_policy(tmp_path),
+                                  ai_sleeve_state_path=tmp_path / "no_state.csv")
 
 
 def _candidate(symbol="GRID", theme="smart_grid", asset_type="theme_etf"):
@@ -183,7 +185,7 @@ def test_portfolio_context_slack_digest_mentions_ai_sleeve_scope(tmp_path):
     )
     assert "AI検証枠" in digest
     assert "read-only" in digest
-    assert "全資産の売却・是正提案ではない" in digest
+    assert "売却・是正提案ではない" in digest
 
 
 def test_portfolio_context_audit_summary_mentions_read_only_core(tmp_path):

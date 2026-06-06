@@ -224,7 +224,7 @@ _ALIGN_ICON = {"aligned": "✅", "mild_divergence": "⚠️", "divergence": "�
                "unknown": "❓", "no_human_decision": "—"}
 
 
-def build_audit_markdown(audit: DecisionAudit) -> str:
+def build_audit_markdown(audit: DecisionAudit, portfolio_context=None) -> str:
     lines: list[str] = []
     lines.append(f"# Integrated Decision Audit — {audit.month}")
     lines.append("")
@@ -313,6 +313,10 @@ def build_audit_markdown(audit: DecisionAudit) -> str:
     lines.append("- core_manual（コア資産）は read-only。売却・是正提案の主対象にしません。")
     lines.append("- Bot管理対象はAI検証枠(ai_sleeve)のみ。AI判断と人間判断のズレはAI検証枠内の判断として扱います。")
     lines.append("- 今回の判断はAI検証枠が対象であり、全資産の売却・是正提案ではありません。")
+    if portfolio_context is not None:
+        from src.portfolio_context import build_audit_context_notes
+        # AI sleeve numbers come from ai_sleeve_state.csv (existing BOTZ/GRID NOT summed).
+        lines.extend(build_audit_context_notes(portfolio_context))
     lines.append("")
     return "\n".join(lines)
 

@@ -65,6 +65,7 @@ from src.portfolio_context import (
     build_slack_context_line,
     load_portfolio_context,
 )
+from src.ai_sleeve_deployment_log import record_sleeve_deployment
 from src.decision_audit import build_audit_markdown, build_decision_audit, save_audit_report
 from src.slack_actions import build_action_value
 from src.slack_publish import (
@@ -246,6 +247,80 @@ def parse_args() -> argparse.Namespace:
         "--audit-output",
         default=None,
         help="Output path for the audit summary Markdown (default: reports/audit/decision_audit_YYYYMM.md).",
+    )
+    # Phase 5.0.7: AI sleeve deployment log (manual record; no order quantity)
+    parser.add_argument(
+        "--sleeve-record",
+        action="store_true",
+        default=False,
+        help=(
+            "Record one AI-sleeve deployment decision (append-only log). "
+            "Advisory only — no brokerage call, no order quantity computed."
+        ),
+    )
+    parser.add_argument(
+        "--sleeve-action",
+        default="deploy",
+        choices=["deploy", "reduce", "note", "correct"],
+        help="Deployment action: deploy (cash->invested) | reduce (invested->cash) | note | correct.",
+    )
+    parser.add_argument(
+        "--sleeve-symbol",
+        default="",
+        help="ETF symbol recorded in the deployment log entry.",
+    )
+    parser.add_argument(
+        "--sleeve-theme",
+        default="",
+        help="Theme for the deployment log entry.",
+    )
+    parser.add_argument(
+        "--sleeve-amount",
+        type=float,
+        default=0.0,
+        help="Consideration amount in JPY (NOT an order quantity; human-entered JPY intent).",
+    )
+    parser.add_argument(
+        "--sleeve-account",
+        default="taxable",
+        help="Account for the deployment log entry (default: taxable).",
+    )
+    parser.add_argument(
+        "--sleeve-notes",
+        default="",
+        help="Free-text notes for the deployment log entry.",
+    )
+    parser.add_argument(
+        "--sleeve-month",
+        default=None,
+        help="YYYY-MM month for the deployment log file (default: run date month).",
+    )
+    # Phase 5.1: Crash Signal MVP — advisory watchlist candidate detection
+    parser.add_argument(
+        "--crash-signal-check",
+        action="store_true",
+        default=False,
+        help=(
+            "Run crash signal check (advisory only). "
+            "No orders, no auto-trade, no brokerage integration."
+        ),
+    )
+    parser.add_argument(
+        "--signal-symbol",
+        default=None,
+        help="Check only this ETF symbol (e.g. GRID). Default: all active universe ETFs.",
+    )
+    parser.add_argument(
+        "--signal-side",
+        default="BUY",
+        choices=["BUY", "SELL", "HOLD", "RISK_REVIEW"],
+        help="Signal side (default: BUY). SELL is reserved in MVP and always returns NO_ACTION.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Dry-run: generate signals in memory only; do not write watchlist or history files.",
     )
     return parser.parse_args()
 
@@ -589,7 +664,10 @@ def _handle_audit_summary(args: argparse.Namespace) -> None:
     logger.info(f"=== Decision Audit Summary (month={month}) ===")
 
     audit = build_decision_audit(month)
-    markdown = build_audit_markdown(audit)
+    # Phase 5.0.6: AI sleeve state (ai_sleeve_state.csv) — read-only; existing
+    # BOTZ/GRID are NOT summed into the sleeve invested amount.
+    _, portfolio_ctx = load_candidate_enrichment()
+    markdown = build_audit_markdown(audit, portfolio_context=portfolio_ctx)
     report_path = save_audit_report(markdown, month, output_path=args.audit_output)
 
     print(f"\nDecision audit report: {report_path}")
@@ -597,13 +675,184 @@ def _handle_audit_summary(args: argparse.Namespace) -> None:
     logger.info("=== Decision Audit Summary completed ===")
 
 
+def _handle_sleeve_record(args: argparse.Namespace) -> None:
+    """Phase 5.0.7: record one AI-sleeve deployment decision (advisory only).
+
+    Appends to ``data/ai_sleeve_state_YYYYMM.csv`` and updates
+    ``data/ai_sleeve_state.csv`` with the resulting cash/invested balance.
+    No brokerage call, no order quantity computed.
+    """
+    run_date = date.fromisoformat(args.date) if args.date else date.today()
+    logger.info(f"=== Sleeve Deployment Record (run_date={run_date}) ===")
+
+    entry = record_sleeve_deployment(
+        as_of_date=run_date.isoformat(),
+        action=args.sleeve_action,
+        symbol=args.sleeve_symbol,
+        theme=args.sleeve_theme,
+        consideration_jpy=args.sleeve_amount,
+        account=args.sleeve_account,
+        notes=args.sleeve_notes,
+        month=args.sleeve_month or run_date.strftime("%Y-%m"),
+    )
+
+    print(f"Sleeve record appended: {entry.action.value} {entry.symbol or '(no symbol)'}")
+    print(f"  consideration_jpy: {entry.consideration_jpy:,.0f} (NOT an order quantity)")
+    print(f"  resulting: cash={entry.resulting_cash_jpy:,.0f}  invested={entry.resulting_invested_jpy:,.0f}")
+    logger.info("=== Sleeve Deployment Record completed ===")
+
+
+def _handle_crash_signal_check(args: argparse.Namespace) -> None:
+    """Phase 5.1: crash signal check (advisory only).
+
+    Generates watchlist candidate signals for AI-sleeve ETFs.
+    - No orders, no order quantities, no brokerage API calls.
+    - SELL reserved in MVP: always returns NO_ACTION.
+    - dry_run=True: no watchlist.csv / signal_history.csv writes.
+    """
+    from src.signals.crash_detector import DEFAULT_MARKET_DATA_PATH, detect_crash_triggers, load_market_data
+    from src.signals.signal_committee_runner import run_signal_committee
+    from src.signals.signal_config import load_signal_config
+    from src.signals.signal_context_builder import build_signal_context
+    from src.signals.signal_engine import aggregate_signal
+    from src.signals.signal_models import SignalSide
+    from src.signals.signal_report import build_signal_markdown, save_signal_report
+    from src.signals.watchlist_store import (
+        append_signal_history,
+        load_watchlist,
+        save_watchlist,
+        update_watchlist_entry,
+    )
+
+    run_date = date.fromisoformat(args.date) if args.date else date.today()
+    dry_run: bool = args.dry_run
+    logger.info(
+        f"=== Crash Signal Check starting (run_date={run_date}, dry_run={dry_run}) ==="
+    )
+
+    signal_cfg = load_signal_config("config/signal_config.yaml")
+    market_data = load_market_data(DEFAULT_MARKET_DATA_PATH)
+
+    triggers = detect_crash_triggers(market_data, signal_cfg)
+    logger.info(f"Global crash triggers detected: {triggers or '(none)'}")
+
+    # Determine which symbols to evaluate
+    if args.signal_symbol:
+        symbols = [args.signal_symbol.upper()]
+    else:
+        master = load_etf_master(DEFAULT_MASTER_PATH)
+        if master:
+            symbols = [
+                sym for sym, e in master.items()
+                if getattr(e, "include_in_active_universe", True)
+            ]
+        else:
+            symbols = ["GRID", "ITA", "CIBR", "QQQM", "SOXX"]
+        logger.info(f"Evaluating {len(symbols)} symbols from ETF master")
+
+    signal_side = SignalSide(args.signal_side)
+
+    # Load read-only portfolio context (best-effort)
+    _, portfolio_ctx = load_candidate_enrichment()
+
+    # Load committee config (reuse existing 7 members)
+    committee_cfg = load_committee_config()
+    committee_cfg.enabled = True
+    committee_cfg.satellite_activation = "always"
+
+    # LLM client: None → neutral fallbacks (no cost in dry-run / no API key)
+    llm_client = None
+    try:
+        cfg = load_config(args.config)
+        provider, model = _resolve_ai_provider_model(args, cfg)
+        llm_client = create_client(provider=provider, model=model)
+        logger.info(f"Signal committee using provider={provider}, model={model}")
+    except Exception as e:
+        logger.warning(f"Signal committee: no LLM client ({e}) — neutral fallbacks used.")
+
+    # Load watchlist for in-memory update
+    watchlist_path = "data/watchlist.csv"
+    archive_dir = "data/archive"
+    watchlist = load_watchlist(watchlist_path)
+
+    results = []
+    for symbol in symbols:
+        try:
+            ctx = build_signal_context(
+                symbol, market_data, signal_cfg,
+                portfolio_context=portfolio_ctx,
+            )
+            members = run_signal_committee(ctx, committee_cfg, client=llm_client)
+            result = aggregate_signal(symbol, signal_side, members, ctx, signal_cfg, portfolio_ctx)
+            watchlist = update_watchlist_entry(watchlist, result, dry_run=dry_run)
+            append_signal_history(result, "logs/signal_history.csv", dry_run=dry_run)
+            results.append(result)
+            logger.info(
+                f"  {symbol}: {result.final_signal.value} "
+                f"(score={result.total_score:+d}, veto={result.veto_count})"
+            )
+        except Exception as e:
+            logger.warning(f"Signal check failed for {symbol}: {type(e).__name__}: {e}")
+
+    if not dry_run and results:
+        save_watchlist(watchlist, watchlist_path, dry_run=False, archive_dir=archive_dir)
+
+    # Determine market_regime for report
+    market_regime = (
+        results[0].member_outputs[0].rationale[:20]
+        if results and results[0].member_outputs
+        else "neutral"
+    )
+    # Use the signal context market_regime from the first result's trigger labels
+    first_ctx_regime = "normal"
+    if triggers:
+        first_ctx_regime = "correction"
+    if any("パニック" in t or "VIXパニック" in t for t in triggers):
+        first_ctx_regime = "panic"
+    elif any("急落" in t or "暴落" in t for t in triggers):
+        first_ctx_regime = "crash"
+
+    markdown = build_signal_markdown(results, market_regime=first_ctx_regime)
+
+    if dry_run:
+        print("\n[DRY-RUN] Signal Report (in-memory only; no files written)\n")
+        sys.stdout.buffer.write((markdown[:3000] + "\n").encode("utf-8", errors="replace"))
+        sys.stdout.buffer.flush()
+    else:
+        report_path = save_signal_report(markdown, out_dir="reports")
+        print(f"\nSignal report: {report_path}")
+
+    summary_lines = [
+        f"\nCrash Signal Check: {len(results)} symbol(s) evaluated",
+        f"Global triggers: {triggers or '(none)'}",
+    ] + [
+        f"  {r.symbol}: {r.final_signal.value} "
+        f"(score={r.total_score:+d}, conf={r.confidence:.0%}, veto={r.veto_count})"
+        for r in results
+    ]
+    sys.stdout.buffer.write(("\n".join(summary_lines) + "\n").encode("utf-8", errors="replace"))
+    sys.stdout.buffer.flush()
+
+    logger.info("=== Crash Signal Check completed ===")
+
+
 def main() -> None:
     load_dotenv()
     args = parse_args()
 
+    # Phase 5.1: crash signal check — advisory only, separate from monthly pipeline
+    if args.crash_signal_check:
+        _handle_crash_signal_check(args)
+        return
+
     # Phase 5: integrated decision audit — separate, reads logs only
     if args.audit_summary:
         _handle_audit_summary(args)
+        return
+
+    # Phase 5.0.7: sleeve deployment record — manual, advisory only
+    if args.sleeve_record:
+        _handle_sleeve_record(args)
         return
 
     # Phase 3: record-decision mode — no pipeline re-run

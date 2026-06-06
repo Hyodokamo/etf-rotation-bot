@@ -1,0 +1,51 @@
+market_triggers:
+  spy_daily_drop_pct: -2.0
+  qqq_daily_drop_pct: -3.0
+  qqq_drawdown_from_high_pct: -8.0
+  qqq_severe_drawdown_from_high_pct: -15.0
+  vix_stress_level: 25
+  vix_panic_level: 35
+
+theme_triggers:
+  semiconductor_daily_drop_pct: -5.0
+  semiconductor_drawdown_from_high_pct: -10.0
+  theme_daily_drop_pct: -4.0
+  theme_drawdown_from_high_pct: -10.0
+
+candidate_rules:
+  min_total_score_for_buy_candidate: 3
+  min_positive_members_for_buy_candidate: 3
+  min_total_score_for_high_priority: 6
+  min_positive_members_for_high_priority: 5
+  block_if_portfolio_risk_high: true
+  block_if_ai_auditor_veto: true
+  block_if_any_major_veto: true
+  block_if_ai_sleeve_cash_jpy_lte: 0
+  min_cooldown_hours_same_etf: 24
+  min_cooldown_hours_same_theme: 12
+
+ai_sleeve_rules:
+  max_initial_deployment_jpy: 250000
+  min_cash_buffer_ratio_after_signal: 0.50
+  max_single_etf_watch_allocation_ratio: 0.25
+  max_single_theme_watch_allocation_ratio: 0.40
+  no_order_quantity: true
+  no_auto_trade: true
+
+signals:
+  allowed_signal_side:
+    - BUY
+    - SELL
+    - HOLD
+    - RISK_REVIEW
+  implemented_signal_side:
+    - BUY
+    - HOLD
+    - RISK_REVIEW
+  allowed_final_signal:
+    - NO_ACTION
+    - WATCH
+    - BUY_CANDIDATE
+    - HIGH_PRIORITY_CANDIDATE
+    - HOLD_OFF
+    - REJECT_FOR_NOW

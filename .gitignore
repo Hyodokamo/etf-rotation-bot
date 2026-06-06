@@ -33,5 +33,6 @@ data/total_portfolio_snapshot.csv
 data/ai_sleeve_state.csv
 data/ai_sleeve_state_*.csv
 data/archive/ai_sleeve_state_*.csv
+data/archive/watchlist_*.csv
 reports/portfolio_context_summary_*.csv
 reports/rakuten_portfolio_context_*.xlsx

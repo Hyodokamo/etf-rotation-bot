@@ -36,3 +36,9 @@ data/archive/ai_sleeve_state_*.csv
 data/archive/watchlist_*.csv
 reports/portfolio_context_summary_*.csv
 reports/rakuten_portfolio_context_*.xlsx
+data/watchlist.csv
+data/market_data_latest.csv
+logs/signal_history.csv
+logs/signal_committee_log.jsonl
+data/archive/watchlist_*.csv
+reports/daily_signal_report.md

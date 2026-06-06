@@ -86,6 +86,8 @@ def build_signal_digest_text(
     market_data: dict[str, dict] | None = None,
     reference_symbols: list[str] | None = None,
     as_of_date: str | None = None,
+    committee_target_count: int = 0,
+    skipped_count: int = 0,
 ) -> str:
     """Build a Slack-ready Signal Digest from Crash Signal results.
 
@@ -98,6 +100,8 @@ def build_signal_digest_text(
         market_data: {symbol: row_dict} for macro values (VIX/US10Y/DXY).
         reference_symbols: symbols that are market_reference (default: SPY/QQQ/SOXX/SMH).
         as_of_date: display date string (YYYY-MM-DD).
+        committee_target_count: number of symbols that had LLM committee run today.
+        skipped_count: number of symbols skipped by trigger gate (no triggers).
 
     Returns:
         Slack mrkdwn-ready digest string. Never empty.
@@ -132,6 +136,14 @@ def build_signal_digest_text(
     # ── Header ────────────────────────────────────────────────────────────────
     lines.append(f"*AI検証枠 Signal Digest — {today}*")
     lines.append("")
+
+    # ── Committee execution summary (Phase 6.1) ────────────────────────────────
+    if committee_target_count > 0 or skipped_count > 0:
+        lines.append(
+            f"本日Committee実行対象: {committee_target_count}件 / "
+            f"スキップ: {skipped_count}件（急落トリガーなし）"
+        )
+        lines.append("")
 
     # ── Summary conclusion ────────────────────────────────────────────────────
     lines.append("*本日の結論:*")
@@ -216,13 +228,72 @@ def build_signal_digest_text(
     return text
 
 
+def build_due_slack_section(due_items: list) -> str:
+    """Build a Slack mrkdwn section for review-due items (Phase 5.5).
+
+    Args:
+        due_items: list[ReviewDueItem] from signal_review_due.classify_watchlist().
+
+    Returns empty string if no due items.
+    Groups by DueCategory: overdue, due_today, due_soon, locked.
+    """
+    if not due_items:
+        return ""
+
+    from src.signals.signal_review_due import DueCategory
+
+    _SLACK_SECTION_TITLES = {
+        DueCategory.OVERDUE: "期限超過（overdue）",
+        DueCategory.DUE_TODAY: "本日確認（due_today）",
+        DueCategory.DUE_SOON: "近日確認（due_soon）",
+        DueCategory.NO_DATE: "確認日未設定",
+        DueCategory.LOCKED: "人間判断済み locked",
+        DueCategory.ON_SCHEDULE: "スケジュール通り",
+    }
+
+    # Show categories in priority order, skip ON_SCHEDULE (not actionable)
+    show_cats = [
+        DueCategory.OVERDUE,
+        DueCategory.DUE_TODAY,
+        DueCategory.DUE_SOON,
+        DueCategory.LOCKED,
+        DueCategory.NO_DATE,
+    ]
+
+    grouped: dict = {}
+    for item in due_items:
+        grouped.setdefault(item.due_category, []).append(item)
+
+    lines: list[str] = []
+    for cat in show_cats:
+        cat_items = grouped.get(cat, [])
+        if not cat_items:
+            continue
+        section_title = _SLACK_SECTION_TITLES.get(cat, str(cat))
+        lines.append(f"*{section_title}:*")
+        for item in cat_items:
+            lock_mark = " [locked]" if item.is_locked else ""
+            nrd = item.next_review_date or "(未設定)"
+            lines.append(
+                f"- *{item.ticker}* [{item.status}{lock_mark}]"
+                f" {nrd} — {item.recommendation}"
+            )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def build_review_slack_digest(
     items: list[dict],
+    due_items: list | None = None,
     as_of_date: str | None = None,
 ) -> str:
     """Build a Slack-ready Signal Review digest from watchlist items.
 
     Shows current watchlist status including human decisions.
+    When due_items (list[ReviewDueItem]) is provided, adds due sections
+    (期限超過 / 本日確認 / 近日確認 / 人間判断済み locked).
+
     No order execution language. No order quantity.
     """
     today = as_of_date or date.today().isoformat()
@@ -247,6 +318,12 @@ def build_review_slack_digest(
             nrd_part = f" 次回確認={nrd}" if nrd else ""
             lines.append(f"- *{ticker}* [{label}]{conf_part}{nrd_part}")
         lines.append("")
+
+    # Phase 5.5: due sections
+    if due_items:
+        due_section = build_due_slack_section(due_items)
+        if due_section:
+            lines.append(due_section)
 
     lines.append("*安全注記:*")
     lines.append(_SAFETY_FOOTER)

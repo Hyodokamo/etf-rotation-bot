@@ -331,6 +331,28 @@ def parse_args() -> argparse.Namespace:
             "Useful for synthetic crash scenario testing."
         ),
     )
+    # Phase 6.1: Trigger-gated committee — reduce LLM cost in normal markets
+    parser.add_argument(
+        "--committee-on-trigger-only",
+        action="store_true",
+        default=False,
+        dest="committee_on_trigger_only",
+        help=(
+            "Only run LLM committee for symbols that have crash/correction triggers. "
+            "Symbols without triggers get deterministic NO_ACTION (no LLM call). "
+            "Reduces daily run time and API cost. Used by default in daily_signal_check.py."
+        ),
+    )
+    parser.add_argument(
+        "--full-committee-scan",
+        action="store_true",
+        default=False,
+        dest="full_committee_scan",
+        help=(
+            "Run LLM committee for ALL candidate symbols (overrides --committee-on-trigger-only). "
+            "Use when a comprehensive AI scan is needed regardless of trigger status."
+        ),
+    )
     # Phase 5.3: Market Data Fetcher — generates data/market_data_latest.csv
     parser.add_argument(
         "--update-market-data",
@@ -382,6 +404,24 @@ def parse_args() -> argparse.Namespace:
         "--human-signal-note",
         default="",
         help="Optional note to attach to the human decision.",
+    )
+    # Phase 5.5: Review Due Management
+    parser.add_argument(
+        "--overdue",
+        action="store_true",
+        default=False,
+        help=(
+            "With --signal-review: show only overdue / due_today / due_soon items. "
+            "Advisory only — no watchlist updates, no auto-trade, no order quantity."
+        ),
+    )
+    parser.add_argument(
+        "--review-date",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help=(
+            "With --signal-review: show items whose next_review_date matches this date."
+        ),
     )
     # Phase 5.4: Signal Slack Digest
     parser.add_argument(
@@ -796,6 +836,7 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
     from src.signals.signal_engine import aggregate_signal
     from src.signals.signal_models import SignalSide
     from src.signals.signal_report import build_signal_markdown, save_signal_report
+    from src.signals.trigger_gate import make_deterministic_no_action, symbol_has_triggers
     from src.signals.watchlist_store import (
         append_signal_history,
         load_watchlist,
@@ -808,8 +849,14 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
 
     run_date = date.fromisoformat(args.date) if args.date else date.today()
     dry_run: bool = args.dry_run
+    # Phase 6.1: trigger gate — engage when --committee-on-trigger-only and not overridden
+    committee_on_trigger_only: bool = (
+        getattr(args, "committee_on_trigger_only", False)
+        and not getattr(args, "full_committee_scan", False)
+    )
     logger.info(
-        f"=== Crash Signal Check starting (run_date={run_date}, dry_run={dry_run}) ==="
+        f"=== Crash Signal Check starting (run_date={run_date}, dry_run={dry_run}, "
+        f"committee_on_trigger_only={committee_on_trigger_only}) ==="
     )
 
     signal_cfg = load_signal_config("config/signal_config.yaml")
@@ -863,6 +910,8 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
     watchlist = load_watchlist(watchlist_path)
 
     results = []
+    committee_target_count = 0
+    skipped_count = 0
     for symbol in symbols:
         try:
             ctx = build_signal_context(
@@ -870,17 +919,29 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
                 portfolio_context=portfolio_ctx,
                 reference_only=is_market_reference(symbol, roles),
             )
-            members = run_signal_committee(ctx, committee_cfg, client=llm_client)
-            result = aggregate_signal(symbol, signal_side, members, ctx, signal_cfg, portfolio_ctx)
+            # Phase 6.1: skip LLM committee when no triggers and trigger-gate is active
+            if committee_on_trigger_only and not symbol_has_triggers(ctx):
+                result = make_deterministic_no_action(symbol, signal_side, ctx)
+                skipped_count += 1
+                logger.info(f"  {symbol}: NO_ACTION (trigger-gate: no triggers, committee skipped)")
+            else:
+                members = run_signal_committee(ctx, committee_cfg, client=llm_client)
+                result = aggregate_signal(symbol, signal_side, members, ctx, signal_cfg, portfolio_ctx)
+                committee_target_count += 1
+                logger.info(
+                    f"  {symbol}: {result.final_signal.value} "
+                    f"(score={result.total_score:+d}, veto={result.veto_count})"
+                )
             watchlist = update_watchlist_entry(watchlist, result, dry_run=dry_run, updated_by="crash_signal_committee")
             append_signal_history(result, "logs/signal_history.csv", dry_run=dry_run)
             results.append(result)
-            logger.info(
-                f"  {symbol}: {result.final_signal.value} "
-                f"(score={result.total_score:+d}, veto={result.veto_count})"
-            )
         except Exception as e:
             logger.warning(f"Signal check failed for {symbol}: {type(e).__name__}: {e}")
+
+    # Parseable committee count line → stderr (stdout is dominated by log/report output).
+    # daily_signal_check.py reads this from StepLog.stderr_summary.
+    sys.stderr.write(f"[COMMITTEE] target={committee_target_count} skipped={skipped_count}\n")
+    sys.stderr.flush()
 
     if not dry_run and results:
         save_watchlist(watchlist, watchlist_path, dry_run=False, archive_dir=archive_dir)
@@ -898,6 +959,8 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
             market_data=market_data,
             reference_symbols=ref_syms or None,
             as_of_date=str(run_date),
+            committee_target_count=committee_target_count,
+            skipped_count=skipped_count,
         )
         if dry_run:
             sys.stdout.buffer.write(b"\n[SIGNAL-SLACK] Digest (dry-run - not posted to Slack)\n\n")
@@ -1064,6 +1127,50 @@ def _handle_signal_review(args: argparse.Namespace) -> None:
         sys.stdout.buffer.flush()
         return
 
+    # Phase 5.5: Due-focused display modes (--overdue / --review-date)
+    if getattr(args, "overdue", False) or getattr(args, "review_date", None):
+        from src.signals.signal_review_due import (
+            DueCategory,
+            build_due_markdown,
+            load_and_classify,
+        )
+
+        if getattr(args, "overdue", False):
+            due_items = load_and_classify(
+                due_categories=[DueCategory.OVERDUE, DueCategory.DUE_TODAY, DueCategory.DUE_SOON],
+            )
+        else:
+            review_date_str = args.review_date
+            try:
+                from datetime import date as _date
+                _date.fromisoformat(review_date_str)
+            except (ValueError, TypeError):
+                sys.stderr.write(
+                    f"Error: invalid --review-date '{review_date_str}'. Use YYYY-MM-DD.\n"
+                )
+                raise SystemExit(1)
+            all_classified = load_and_classify()
+            due_items = [i for i in all_classified if i.next_review_date == review_date_str]
+
+        md = build_due_markdown(due_items)
+        sys.stdout.buffer.write(md.encode("utf-8", errors="replace"))
+        sys.stdout.buffer.write(b"\n")
+        sys.stdout.buffer.flush()
+
+        if getattr(args, "signal_slack", False):
+            from src.signals.signal_review_due import load_and_classify as _load_all_due
+            from src.signals.slack_signal_digest import build_review_slack_digest, post_signal_digest
+
+            all_due = _load_all_due()
+            all_items = load_watchlist_review_items()
+            digest = build_review_slack_digest(all_items, due_items=all_due)
+            ok = post_signal_digest(digest)
+            if not ok:
+                sys.stdout.buffer.write(digest.encode("utf-8", errors="replace"))
+                sys.stdout.buffer.write(b"\n")
+            sys.stdout.buffer.flush()
+        return
+
     # List mode: show review summary
     items = load_watchlist_review_items()
     summary = build_signal_review_summary(items)
@@ -1071,19 +1178,18 @@ def _handle_signal_review(args: argparse.Namespace) -> None:
     sys.stdout.buffer.write(b"\n")
     sys.stdout.buffer.flush()
 
-    # Phase 5.4: Slack Signal Review Digest (advisory only; no orders)
+    # Phase 5.4 + 5.5: Slack Signal Review Digest (with due sections)
     if getattr(args, "signal_slack", False):
+        from src.signals.signal_review_due import load_and_classify
         from src.signals.slack_signal_digest import build_review_slack_digest, post_signal_digest
 
-        digest_text = build_review_slack_digest(items)
+        all_due = load_and_classify()
+        digest_text = build_review_slack_digest(items, due_items=all_due)
         ok = post_signal_digest(digest_text)
-        if ok:
-            print("Signal Review Digest: Slack送信完了")
-        else:
-            print("Signal Review Digest: Slack未設定または送信失敗（コンソール出力のみ）")
+        if not ok:
             sys.stdout.buffer.write(digest_text.encode("utf-8", errors="replace"))
             sys.stdout.buffer.write(b"\n")
-            sys.stdout.buffer.flush()
+        sys.stdout.buffer.flush()
 
 
 def main() -> None:

@@ -57,6 +57,14 @@ from src.committee.candidate_stability import (
     save_stability_report,
 )
 from src.committee.slack_digest import build_executive_digest
+from src.etf_master import DEFAULT_MASTER_PATH, load_etf_master
+from src.portfolio_context import (
+    DEFAULT_AI_SLEEVE_STATE_PATH,
+    DEFAULT_POLICY_PATH,
+    DEFAULT_SNAPSHOT_PATH,
+    build_slack_context_line,
+    load_portfolio_context,
+)
 from src.decision_audit import build_audit_markdown, build_decision_audit, save_audit_report
 from src.slack_actions import build_action_value
 from src.slack_publish import (
@@ -394,6 +402,45 @@ def _resolve_ai_provider_model(args: argparse.Namespace, cfg) -> tuple[str, str]
     return provider, model
 
 
+def load_candidate_enrichment(
+    master_path: str = DEFAULT_MASTER_PATH,
+    snapshot_path: str = DEFAULT_SNAPSHOT_PATH,
+    policy_path: str = DEFAULT_POLICY_PATH,
+    sleeve_state_path: str = DEFAULT_AI_SLEEVE_STATE_PATH,
+):
+    """Phase 5.0 wiring: load ETF master + read-only portfolio context.
+
+    Both are best-effort and read-only:
+    - ETF master missing -> warning + ``None`` (Candidate Review continues unchanged).
+    - total_portfolio_snapshot.csv missing -> ``None`` portfolio_context (no sleeve scope).
+      ai_sleeve_state.csv is optional; when absent the policy defaults (¥1,000,000 /
+      cash ¥1,000,000 / invested ¥0) apply.
+
+    Never changes final_allocation, never computes order quantity, never trades.
+    """
+    master = load_etf_master(master_path)
+    if not master:
+        logger.warning(
+            f"ETF master not found at {master_path}; Candidate Review continues without enrichment."
+        )
+        master = None
+
+    portfolio_ctx = None
+    if Path(snapshot_path).exists():
+        portfolio_ctx = load_portfolio_context(snapshot_path, policy_path, sleeve_state_path)
+        logger.info(
+            "Portfolio context loaded (read-only): "
+            f"core={len(portfolio_ctx.core_manual)} / "
+            f"ai_sleeve cash={int(portfolio_ctx.ai_sleeve.current_cash_jpy):,} "
+            f"invested={int(portfolio_ctx.ai_sleeve.current_invested_jpy):,}"
+        )
+    else:
+        logger.warning(
+            f"{snapshot_path} not found; portfolio_context (read-only core / AI sleeve) skipped."
+        )
+    return master, portfolio_ctx
+
+
 def _handle_candidate_review(args: argparse.Namespace) -> None:
     """Phase 3.5: review new-buy candidates with the committee (advisory-only).
 
@@ -432,6 +479,9 @@ def _handle_candidate_review(args: argparse.Namespace) -> None:
     portfolio_holdings = prev_state.weights if prev_state else {}
     universe_categories = {a.ticker: a.category for a in cfg.universe.assets}
 
+    # Phase 5.0 wiring: ETF master enrichment + read-only portfolio context.
+    etf_master, portfolio_ctx = load_candidate_enrichment()
+
     # Best-effort price trends (network; failures degrade to None per symbol).
     price_trends = fetch_candidate_trends([c.symbol for c in candidates])
 
@@ -442,10 +492,12 @@ def _handle_candidate_review(args: argparse.Namespace) -> None:
         portfolio_holdings=portfolio_holdings,
         universe_categories=universe_categories,
         price_trends=price_trends,
+        portfolio_context=portfolio_ctx,
+        etf_master=etf_master,
         review_date=run_date.isoformat(),
     )
 
-    markdown = build_candidate_markdown(results, run_date.isoformat())
+    markdown = build_candidate_markdown(results, run_date.isoformat(), portfolio_context=portfolio_ctx)
     report_path = save_candidate_report(markdown, run_date.isoformat())
 
     # Phase 3.6: append each candidate review to the append-only decision log.
@@ -493,7 +545,8 @@ def _handle_candidate_review(args: argparse.Namespace) -> None:
                 post_committee_message(summary, blocks, channel)
         else:
             slack_text = "\n\n".join(build_candidate_slack_summary(r) for r in results)
-            post_to_slack("*Candidate Review*\n\n" + slack_text)
+            header = ("\n".join(build_slack_context_line(portfolio_ctx)) + "\n\n") if portfolio_ctx else ""
+            post_to_slack("*Candidate Review*\n\n" + header + slack_text)
 
     print(f"\nCandidate Review report: {report_path}")
     for r in results:

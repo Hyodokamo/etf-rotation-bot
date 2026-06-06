@@ -30,6 +30,8 @@ from src.logger import logger
 from src.portfolio_context import (
     PortfolioContext,
     build_committee_read_only_instruction,
+    build_portfolio_context_markdown,
+    build_slack_context_line,
     detect_core_overlap,
     to_committee_context,
 )
@@ -120,6 +122,10 @@ class CandidateReviewResult(BaseModel):
     universe_status: str = ""
     review_role: str = ""
     review_frequency: str = ""
+    role_in_ai_sleeve: str = ""
+    expected_overlap_with_core: str = ""
+    nisa_usage_policy: str = ""
+    preferred_account: str = ""
     needs_order_screen_check: bool = False
     data_quality_status: str = ""
     data_quality_warning: str = ""
@@ -438,6 +444,10 @@ def review_candidate(
         universe_status=enrichment.get("universe_status", "") if enrichment else "",
         review_role=enrichment.get("review_role", "") if enrichment else "",
         review_frequency=enrichment.get("review_frequency", "") if enrichment else "",
+        role_in_ai_sleeve=enrichment.get("role_in_ai_sleeve", "") if enrichment else "",
+        expected_overlap_with_core=enrichment.get("expected_overlap_with_core", "") if enrichment else "",
+        nisa_usage_policy=enrichment.get("nisa_usage_policy", "") if enrichment else "",
+        preferred_account=enrichment.get("preferred_account", "") if enrichment else "",
         needs_order_screen_check=bool(enrichment.get("needs_order_screen_check")) if enrichment else False,
         data_quality_status=enrichment.get("data_quality_status", "") if enrichment else "",
         data_quality_warning=data_quality_warning,
@@ -525,7 +535,11 @@ _VERDICT_ICON = {
 }
 
 
-def build_candidate_markdown(results: list[CandidateReviewResult], review_date: str | None = None) -> str:
+def build_candidate_markdown(
+    results: list[CandidateReviewResult],
+    review_date: str | None = None,
+    portfolio_context: PortfolioContext | None = None,
+) -> str:
     review_date = review_date or date.today().isoformat()
     lines: list[str] = []
     lines.append("# Candidate Review（新規買付候補レビュー・助言専用）")
@@ -536,6 +550,9 @@ def build_candidate_markdown(results: list[CandidateReviewResult], review_date: 
         "intended_amount_jpy は検討額であり株数には変換しません。月次運用レビューより厳しく審査しています。"
     )
     lines.append("")
+    if portfolio_context is not None:
+        lines.extend(build_portfolio_context_markdown(portfolio_context))
+        lines.append("")
     for r in results:
         c = r.candidate
         icon = _VERDICT_ICON.get(r.candidate_verdict, "")
@@ -549,9 +566,21 @@ def build_candidate_markdown(results: list[CandidateReviewResult], review_date: 
             role = f"{r.review_role}（{r.review_frequency}）" if r.review_role else r.review_frequency
             known = "" if r.etf_master_known else " ⚠️ ETF Master未登録（unknown metadata）"
             lines.append(f"- ユニバース区分: `{r.universe_status}` / {role}{known}")
+        if r.role_in_ai_sleeve:
+            lines.append(f"- AI検証枠での役割: {r.role_in_ai_sleeve}")
+        if r.expected_overlap_with_core:
+            lines.append(f"- 既存コアとの重複想定: `{r.expected_overlap_with_core}`")
+        if r.agent_affinity:
+            lines.append(f"- 賛成論点が出やすいエージェント(参考・評価制限ではない): {', '.join(r.agent_affinity)}")
+        if r.agent_concern:
+            lines.append(f"- 反対論点が出やすいエージェント(参考): {', '.join(r.agent_concern)}")
+        if r.nisa_usage_policy or r.preferred_account:
+            lines.append(f"- NISA方針: {r.nisa_usage_policy or '—'} / 推奨口座: {r.preferred_account or '—'}")
+        if r.data_quality_status:
+            lines.append(f"- data_quality_status: `{r.data_quality_status}`")
         if r.needs_order_screen_check:
             lines.append("")
-            lines.append("> ⚠️ **発注前確認要**：ブローカー取扱い・最新費用等を注文画面で必ず確認（自動発注は行いません）")
+            lines.append("> ⚠️ **発注前確認要**：発注前に証券会社の注文画面でブローカー取扱い・最新費用等を確認（自動発注は行いません）")
         if r.data_quality_warning:
             lines.append(f"- 🔍 データ品質警告: {r.data_quality_warning}")
         lines.append("")
@@ -611,7 +640,10 @@ def save_candidate_report(
     return str(path)
 
 
-def build_candidate_slack_summary(result: CandidateReviewResult) -> str:
+def build_candidate_slack_summary(
+    result: CandidateReviewResult,
+    portfolio_context: PortfolioContext | None = None,
+) -> str:
     c = result.candidate
     icon = _VERDICT_ICON.get(result.candidate_verdict, "")
     top_risk = result.key_risks[0] if result.key_risks else "—"
@@ -621,9 +653,23 @@ def build_candidate_slack_summary(result: CandidateReviewResult) -> str:
         f"主リスク: {top_risk}",
         f"助言: {result.final_advisory}",
     ]
+    if result.universe_status:
+        known = "" if result.etf_master_known else "（ETF Master未登録）"
+        lines.append(f"区分: {result.universe_status}{known} / 役割: {result.role_in_ai_sleeve or '—'}")
+    if result.expected_overlap_with_core:
+        lines.append(f"コア重複想定: {result.expected_overlap_with_core}")
+    if result.agent_affinity or result.agent_concern:
+        lines.append(
+            f"参考エージェント 賛成寄り: {', '.join(result.agent_affinity) or '—'} / "
+            f"反対寄り: {', '.join(result.agent_concern) or '—'}（評価制限ではない）"
+        )
+    if result.nisa_usage_policy or result.preferred_account:
+        lines.append(f"NISA方針: {result.nisa_usage_policy or '—'} / 推奨口座: {result.preferred_account or '—'}")
     if result.needs_order_screen_check:
-        lines.append("⚠️ 発注前確認要（注文画面でブローカー取扱い・最新費用を確認）")
+        lines.append("⚠️ 発注前に証券会社注文画面で確認（ブローカー取扱い・最新費用）")
     if result.data_quality_warning:
         lines.append(f"🔍 データ品質警告: data_quality_status={result.data_quality_status}")
+    if portfolio_context is not None:
+        lines.extend(build_slack_context_line(portfolio_context))
     lines.append("🛡️ shadow: 助言のみ・配分変更/数量計算なし")
     return "\n".join(lines)

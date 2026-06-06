@@ -37,6 +37,7 @@ from src.logger import logger
 
 DEFAULT_SNAPSHOT_PATH = "data/total_portfolio_snapshot.csv"
 DEFAULT_POLICY_PATH = "config/portfolio_context_policy.yaml"
+DEFAULT_AI_SLEEVE_STATE_PATH = "data/ai_sleeve_state.csv"
 
 # Canonical scope vocabulary. Unknown scopes (e.g. a user's "satellite_legacy")
 # are tolerated and treated as reference-only "other".
@@ -255,26 +256,70 @@ def load_portfolio_context_policy(
 # ── budget / state ─────────────────────────────────────────────────────────────
 
 
-def compute_ai_sleeve_state(
-    holdings: list[PortfolioHolding], policy: PortfolioContextPolicy
-) -> AiSleeveState:
-    """Compute the ¥1M AI sleeve budget state.
+def load_ai_sleeve_state(
+    path: str | Path = DEFAULT_AI_SLEEVE_STATE_PATH,
+) -> dict | None:
+    """Load the AI sleeve state CSV (state reference only — never order quantity).
 
-    Cash/invested come from the snapshot when ``ai_sleeve_*`` rows exist,
-    otherwise from the policy. ``total_budget_jpy`` is authoritative from the
-    policy (it is a budget decision, not a market value). No order quantity.
+    Single-row schema: ``as_of_date,total_budget_jpy,current_cash_jpy,current_invested_jpy``
+    (extra columns tolerated). Missing/empty file -> ``None``. Only present numeric
+    keys are returned, so callers fall back to the policy for anything absent.
+    """
+    p = Path(path)
+    if not p.exists():
+        logger.info(f"AI sleeve state not found (using policy defaults): {p}")
+        return None
+    keys = ("total_budget_jpy", "current_cash_jpy", "current_invested_jpy")
+    try:
+        with open(p, encoding="utf-8-sig", newline="") as f:
+            row = next(csv.DictReader(f), None)
+    except OSError as e:
+        logger.warning(f"AI sleeve state read failed; using policy defaults: {e}")
+        return None
+    if not row:
+        return None
+    out: dict = {}
+    for k in keys:
+        v = row.get(k)
+        if v is None or str(v).strip() == "":
+            continue
+        try:
+            out[k] = float(str(v).replace(",", "").strip())
+        except (TypeError, ValueError):
+            continue
+    return out or None
+
+
+def compute_ai_sleeve_state(
+    holdings: list[PortfolioHolding],
+    policy: PortfolioContextPolicy,
+    state_override: dict | None = None,
+) -> AiSleeveState:
+    """Compute the ¥1M AI sleeve budget state (read-only; never order quantity).
+
+    Precedence per field: ``ai_sleeve_state.csv`` override > snapshot ``ai_sleeve_*``
+    rows > policy. ``total_budget_jpy`` is a budget decision (override > policy).
     """
     sleeve = policy.ai_sleeve_policy
+    override = state_override or {}
     cash_rows = [h for h in holdings if h.scope == SCOPE_AI_SLEEVE_CASH]
     invested_rows = [h for h in holdings if h.scope == SCOPE_AI_SLEEVE_INVESTED]
 
-    current_cash = sum(h.market_value_jpy for h in cash_rows) if cash_rows else sleeve.current_cash_jpy
-    current_invested = (
-        sum(h.market_value_jpy for h in invested_rows)
-        if invested_rows
-        else sleeve.current_invested_jpy
-    )
-    total_budget = sleeve.total_budget_jpy
+    if "current_cash_jpy" in override:
+        current_cash = override["current_cash_jpy"]
+    elif cash_rows:
+        current_cash = sum(h.market_value_jpy for h in cash_rows)
+    else:
+        current_cash = sleeve.current_cash_jpy
+
+    if "current_invested_jpy" in override:
+        current_invested = override["current_invested_jpy"]
+    elif invested_rows:
+        current_invested = sum(h.market_value_jpy for h in invested_rows)
+    else:
+        current_invested = sleeve.current_invested_jpy
+
+    total_budget = override.get("total_budget_jpy", sleeve.total_budget_jpy)
 
     if total_budget > 0:
         invested_ratio = round(current_invested / total_budget, 4)
@@ -295,7 +340,9 @@ def compute_ai_sleeve_state(
 
 
 def build_portfolio_context(
-    holdings: list[PortfolioHolding], policy: PortfolioContextPolicy
+    holdings: list[PortfolioHolding],
+    policy: PortfolioContextPolicy,
+    ai_sleeve_state: dict | None = None,
 ) -> PortfolioContext:
     """Separate core (read-only) from AI sleeve and compute the sleeve state."""
     core = [h for h in holdings if h.scope == SCOPE_CORE_MANUAL]
@@ -310,18 +357,20 @@ def build_portfolio_context(
         ai_sleeve_cash=cash,
         ai_sleeve_invested=invested,
         other=other,
-        ai_sleeve=compute_ai_sleeve_state(holdings, policy),
+        ai_sleeve=compute_ai_sleeve_state(holdings, policy, ai_sleeve_state),
     )
 
 
 def load_portfolio_context(
     snapshot_path: str | Path = DEFAULT_SNAPSHOT_PATH,
     policy_path: str | Path = DEFAULT_POLICY_PATH,
+    ai_sleeve_state_path: str | Path | None = DEFAULT_AI_SLEEVE_STATE_PATH,
 ) -> PortfolioContext:
-    """Convenience: load snapshot + policy and build the context."""
+    """Convenience: load snapshot + policy (+ optional sleeve state) and build."""
     policy = load_portfolio_context_policy(policy_path)
     holdings = load_portfolio_snapshot(snapshot_path)
-    return build_portfolio_context(holdings, policy)
+    state = load_ai_sleeve_state(ai_sleeve_state_path) if ai_sleeve_state_path else None
+    return build_portfolio_context(holdings, policy, state)
 
 
 # ── overlap detection ──────────────────────────────────────────────────────────
@@ -438,7 +487,22 @@ def build_slack_context_line(context: PortfolioContext) -> list[str]:
         f"• 全資産コア資産: read-only（売却・是正提案の対象外） / コア{len(context.core_manual)}件",
         (f"• AI検証枠: 予算{int(s.total_budget_jpy):,}円 / "
          f"現金{int(s.current_cash_jpy):,}円 / 投資済み{int(s.current_invested_jpy):,}円"),
+        f"• 初回投入上限: 約{int(s.max_initial_deployment_jpy):,}円（方針）",
         "• 今回の判断はAI検証枠が対象であり、全資産の売却・是正提案ではない",
+    ]
+
+
+def build_portfolio_context_markdown(context: PortfolioContext) -> list[str]:
+    """Markdown lines describing the read-only core / AI sleeve scope (header banner)."""
+    s = context.ai_sleeve
+    return [
+        "> 🧭 **ポートフォリオ文脈（read-only）**",
+        f"> - 全資産コア資産(core_manual): **read-only**（売却・是正提案の主対象にしません） / コア{len(context.core_manual)}件",
+        (f"> - AI検証枠(ai_sleeve): 予算 {int(s.total_budget_jpy):,}円 / "
+         f"現金 {int(s.current_cash_jpy):,}円 / 投資済み {int(s.current_invested_jpy):,}円"
+         f"（cash {s.cash_ratio:.0%} / invested {s.invested_ratio:.0%}）"),
+        f"> - 初回投入上限: 約{int(s.max_initial_deployment_jpy):,}円（方針）",
+        "> - 今回の判断はAI検証枠が対象であり、全資産の売却・是正提案ではありません",
     ]
 
 

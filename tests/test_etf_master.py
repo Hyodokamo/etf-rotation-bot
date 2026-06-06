@@ -277,7 +277,7 @@ def test_etf_master_slack_shows_order_screen_warning(tmp_path):
     cfg = load_committee_config()
     r = review_candidate(_candidate("ITA"), cfg, None, etf_master=_master(tmp_path))
     slack = build_candidate_slack_summary(r)
-    assert "発注前確認要" in slack
+    assert "発注前" in slack and "注文画面" in slack
 
 
 # ── safety invariants ──────────────────────────────────────────────────────────

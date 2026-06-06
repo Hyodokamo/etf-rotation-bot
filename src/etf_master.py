@@ -245,6 +245,8 @@ def build_enrichment(entry: EtfMasterEntry) -> dict:
         "offense_defense": entry.offense_defense,
         "expected_overlap_with_core": entry.expected_overlap_with_core,
         "core_overlap_reason": entry.core_overlap_reason,
+        "nisa_usage_policy": entry.nisa_usage_policy,
+        "preferred_account": entry.preferred_account,
         # Hints only — NOT a filter. Every member evaluates every ETF.
         "agent_affinity_hint": entry.agent_affinity,
         "agent_concern_hint": entry.agent_concern,

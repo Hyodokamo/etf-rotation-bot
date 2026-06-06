@@ -383,6 +383,18 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Optional note to attach to the human decision.",
     )
+    # Phase 5.4: Signal Slack Digest
+    parser.add_argument(
+        "--signal-slack",
+        action="store_true",
+        default=False,
+        dest="signal_slack",
+        help=(
+            "Post a Signal Digest to Slack after --crash-signal-check or --signal-review. "
+            "Advisory only — no orders, no order quantities, no brokerage integration. "
+            "Falls back to console output if SLACK_WEBHOOK_URL is not set."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -873,6 +885,35 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
     if not dry_run and results:
         save_watchlist(watchlist, watchlist_path, dry_run=False, archive_dir=archive_dir)
 
+    # Phase 5.4: Slack Signal Digest (advisory only; no orders, no brokerage)
+    if getattr(args, "signal_slack", False):
+        from src.signals.market_data_fetcher import MARKET_REFERENCE_ROLES
+        from src.signals.slack_signal_digest import build_signal_digest_text, post_signal_digest
+
+        ref_syms = [sym for sym, role in roles.items() if role in MARKET_REFERENCE_ROLES]
+        current_watchlist = load_watchlist(watchlist_path)
+        digest_text = build_signal_digest_text(
+            results=results,
+            watchlist_items=current_watchlist,
+            market_data=market_data,
+            reference_symbols=ref_syms or None,
+            as_of_date=str(run_date),
+        )
+        if dry_run:
+            sys.stdout.buffer.write(b"\n[SIGNAL-SLACK] Digest (dry-run - not posted to Slack)\n\n")
+            sys.stdout.buffer.write(digest_text.encode("utf-8", errors="replace"))
+            sys.stdout.buffer.write(b"\n")
+            sys.stdout.buffer.flush()
+        else:
+            ok = post_signal_digest(digest_text)
+            if ok:
+                print("Signal Digest: Slack送信完了")
+            else:
+                print("Signal Digest: Slack未設定または送信失敗（コンソール出力のみ）")
+                sys.stdout.buffer.write(digest_text.encode("utf-8", errors="replace"))
+                sys.stdout.buffer.write(b"\n")
+                sys.stdout.buffer.flush()
+
     # Determine market_regime for report
     market_regime = (
         results[0].member_outputs[0].rationale[:20]
@@ -1029,6 +1070,20 @@ def _handle_signal_review(args: argparse.Namespace) -> None:
     sys.stdout.buffer.write(summary.encode("utf-8", errors="replace"))
     sys.stdout.buffer.write(b"\n")
     sys.stdout.buffer.flush()
+
+    # Phase 5.4: Slack Signal Review Digest (advisory only; no orders)
+    if getattr(args, "signal_slack", False):
+        from src.signals.slack_signal_digest import build_review_slack_digest, post_signal_digest
+
+        digest_text = build_review_slack_digest(items)
+        ok = post_signal_digest(digest_text)
+        if ok:
+            print("Signal Review Digest: Slack送信完了")
+        else:
+            print("Signal Review Digest: Slack未設定または送信失敗（コンソール出力のみ）")
+            sys.stdout.buffer.write(digest_text.encode("utf-8", errors="replace"))
+            sys.stdout.buffer.write(b"\n")
+            sys.stdout.buffer.flush()
 
 
 def main() -> None:

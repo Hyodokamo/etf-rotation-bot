@@ -244,6 +244,7 @@ def build_signal_context(
     config,
     portfolio_context=None,
     etf_master: dict | None = None,
+    reference_only: bool = False,
 ) -> SignalContext:
     """Build complete SignalContext for one ETF symbol. Deterministic — no LLM."""
     from src.etf_master import get_entry, build_enrichment
@@ -299,4 +300,5 @@ def build_signal_context(
         etf_master_metadata=enrichment,
         portfolio_context_summary=pctx_summary,
         market_data=dict(symbol_row),
+        reference_only=reference_only,
     )

@@ -85,6 +85,7 @@ class SignalContext(BaseModel):
     etf_master_metadata: dict = Field(default_factory=dict)
     portfolio_context_summary: dict = Field(default_factory=dict)
     market_data: dict = Field(default_factory=dict)
+    reference_only: bool = False            # True for market_reference/benchmark/macro symbols
 
 
 class SignalResult(BaseModel):

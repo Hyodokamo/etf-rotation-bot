@@ -1,16 +1,44 @@
 market_data:
-  etf_symbols:
-    - SPY
-    - QQQ
-    - SOXX
-    - SMH
-    - GRID
-    - BOTZ
-    - ITA
-    - XLU
-    - PAVE
-    - AVUV
-    - CIBR
+  # Symbol list with roles.
+  # role:
+  #   market_reference  — used for market_regime / stress calculation; never buy-candidate
+  #   candidate         — active buy-candidate universe (AI検証枠対象)
+  #   benchmark         — reference only; not a buy-candidate
+  #   macro_indicator   — macro data; not a buy-candidate
+  symbols:
+    - symbol: SPY
+      role: market_reference
+      purpose: market_regime
+    - symbol: QQQ
+      role: market_reference
+      purpose: growth_regime
+    - symbol: SOXX
+      role: market_reference
+      purpose: semiconductor_stress
+    - symbol: SMH
+      role: market_reference
+      purpose: semiconductor_stress
+    - symbol: GRID
+      role: candidate
+      purpose: active_core_candidate
+    - symbol: BOTZ
+      role: candidate
+      purpose: active_core_candidate
+    - symbol: ITA
+      role: candidate
+      purpose: active_core_candidate
+    - symbol: XLU
+      role: candidate
+      purpose: active_core_candidate
+    - symbol: PAVE
+      role: candidate
+      purpose: active_core_candidate
+    - symbol: AVUV
+      role: candidate
+      purpose: active_core_candidate
+    - symbol: CIBR
+      role: candidate
+      purpose: active_core_candidate
 
   macro:
     vix_symbol: "^VIX"

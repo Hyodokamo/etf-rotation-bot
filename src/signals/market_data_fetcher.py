@@ -1,7 +1,13 @@
-"""Phase 5.3: Market Data Fetcher.
+"""Phase 5.3 / 5.3.1: Market Data Fetcher with symbol role separation.
 
 Fetches ETF/index/macro market data and writes data/market_data_latest.csv
 for use by the Crash Signal Layer.
+
+Symbol roles (from config/market_data_config.yaml):
+  market_reference  — used for market_regime/stress calculation; never buy-candidate
+  candidate         — active buy-candidate universe (AI検証枠対象)
+  benchmark         — reference only; not a buy-candidate
+  macro_indicator   — macro data; not a buy-candidate
 
 Safety invariants (always enforced):
 - No order quantity calculation
@@ -32,8 +38,11 @@ MARKET_DATA_COLUMNS = [
     "symbol", "as_of_date", "last_price", "daily_return_pct",
     "return_5d_pct", "return_20d_pct", "drawdown_from_52w_high_pct",
     "above_200dma", "rsi_14", "volume_ratio",
-    "vix_level", "us10y_yield", "dxy_level", "notes",
+    "vix_level", "us10y_yield", "dxy_level", "notes", "role",
 ]
+
+# Roles that indicate a symbol is for reference/context only — not a buy-candidate
+MARKET_REFERENCE_ROLES = frozenset({"market_reference", "benchmark", "macro_indicator"})
 
 DEFAULT_ETF_SYMBOLS = [
     "SPY", "QQQ", "SOXX", "SMH", "GRID", "BOTZ",
@@ -54,6 +63,56 @@ def load_market_data_config(path: str = DEFAULT_CONFIG_PATH) -> dict:
     with open(p, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     return raw.get("market_data", {})
+
+
+def get_all_symbols(cfg: dict) -> list[str]:
+    """Get all symbols to fetch (regardless of role).
+
+    Supports both the new `symbols` list format and the legacy `etf_symbols` list.
+    """
+    if "symbols" in cfg:
+        return [
+            (s["symbol"] if isinstance(s, dict) else s)
+            for s in cfg["symbols"]
+        ]
+    return cfg.get("etf_symbols", list(DEFAULT_ETF_SYMBOLS))
+
+
+def get_symbol_roles(cfg: dict) -> dict[str, str]:
+    """Return {SYMBOL_UPPER: role_str} mapping from config.
+
+    Returns {} if the config has no `symbols` section (legacy format).
+    Unknown symbols default to "candidate" when looked up.
+    """
+    if "symbols" not in cfg:
+        return {}
+    return {
+        (s["symbol"].upper() if isinstance(s, dict) else s.upper()):
+        (s.get("role", "candidate") if isinstance(s, dict) else "candidate")
+        for s in cfg["symbols"]
+    }
+
+
+def get_candidate_symbols(cfg: dict) -> list[str]:
+    """Get symbols with role=candidate only.
+
+    Falls back to all symbols if the config has no `symbols` section (legacy format).
+    """
+    if "symbols" not in cfg:
+        return list(cfg.get("etf_symbols", DEFAULT_ETF_SYMBOLS))
+    return [
+        (s["symbol"] if isinstance(s, dict) else s)
+        for s in cfg["symbols"]
+        if not isinstance(s, dict) or s.get("role", "candidate") == "candidate"
+    ]
+
+
+def is_market_reference(symbol: str, roles: dict[str, str]) -> bool:
+    """True if symbol has a market_reference, benchmark, or macro_indicator role.
+
+    Unknown symbols (not in roles dict) default to False (treated as candidate).
+    """
+    return roles.get(symbol.upper(), "candidate") in MARKET_REFERENCE_ROLES
 
 
 # ── Pure calculation functions (no yfinance dependency) ───────────────────────
@@ -161,6 +220,7 @@ def fetch_market_data(
     as_of_date: str | None = None,
     config_path: str = DEFAULT_CONFIG_PATH,
     yf_module=None,
+    _symbol_roles: dict[str, str] | None = None,
 ) -> list[dict]:
     """Fetch market data for ETF symbols and macro indicators.
 
@@ -169,9 +229,10 @@ def fetch_market_data(
         as_of_date: Date string (YYYY-MM-DD). Defaults to today.
         config_path: Path to market_data_config.yaml.
         yf_module: yfinance module override (injectable for testing; loads yfinance if None).
+        _symbol_roles: Role mapping override for testing; loads from config if None.
 
     Returns:
-        List of row dicts matching MARKET_DATA_COLUMNS schema.
+        List of row dicts matching MARKET_DATA_COLUMNS schema (includes `role` field).
 
     Safety: Never writes watchlist / signal_history / ai_sleeve_state / etf_master.
     Never computes order quantity. Never calls brokerage APIs.
@@ -180,8 +241,12 @@ def fetch_market_data(
         import yfinance as yf_module  # noqa: PLC0415
 
     cfg = load_market_data_config(config_path)
+
     if symbols is None:
-        symbols = cfg.get("etf_symbols", DEFAULT_ETF_SYMBOLS)
+        symbols = get_all_symbols(cfg)
+
+    # Role lookup: injected for testing, else loaded from config
+    roles = _symbol_roles if _symbol_roles is not None else get_symbol_roles(cfg)
 
     today = as_of_date or date.today().isoformat()
     macro_cfg = cfg.get("macro", {})
@@ -194,7 +259,8 @@ def fetch_market_data(
 
     rows: list[dict] = []
     for symbol in symbols:
-        row = _fetch_one(symbol, today, macro, yf_module, period=history_period)
+        role = roles.get(symbol.upper(), "candidate")
+        row = _fetch_one(symbol, today, macro, yf_module, period=history_period, role=role)
         rows.append(row)
 
     logger.info(f"Market data fetched: {len(rows)} symbols as of {today}")
@@ -237,6 +303,7 @@ def _fetch_one(
     macro: dict,
     yf_module,
     period: str = "1y",
+    role: str = "candidate",
 ) -> dict:
     """Fetch OHLCV history and compute all metrics for one symbol."""
     row: dict[str, Any] = {col: "" for col in MARKET_DATA_COLUMNS}
@@ -245,6 +312,7 @@ def _fetch_one(
     row["vix_level"] = _str(macro.get("vix"))
     row["us10y_yield"] = _str(macro.get("us10y_yield"))
     row["dxy_level"] = _str(macro.get("dxy"))
+    row["role"] = role
 
     try:
         hist = yf_module.Ticker(symbol).history(period=period)

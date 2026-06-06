@@ -772,6 +772,12 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
     - dry_run=True: no watchlist.csv / signal_history.csv writes.
     """
     from src.signals.crash_detector import DEFAULT_MARKET_DATA_PATH, detect_crash_triggers, load_market_data
+    from src.signals.market_data_fetcher import (
+        get_candidate_symbols,
+        get_symbol_roles,
+        is_market_reference,
+        load_market_data_config,
+    )
     from src.signals.signal_committee_runner import run_signal_committee
     from src.signals.signal_config import load_signal_config
     from src.signals.signal_context_builder import build_signal_context
@@ -784,6 +790,9 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
         save_watchlist,
         update_watchlist_entry,
     )
+
+    mdf_cfg = load_market_data_config("config/market_data_config.yaml")
+    roles = get_symbol_roles(mdf_cfg)
 
     run_date = date.fromisoformat(args.date) if args.date else date.today()
     dry_run: bool = args.dry_run
@@ -810,9 +819,10 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
             symbols = [
                 sym for sym, e in master.items()
                 if getattr(e, "include_in_active_universe", True)
+                and not is_market_reference(sym, roles)
             ]
         else:
-            symbols = ["GRID", "ITA", "CIBR", "QQQM", "SOXX"]
+            symbols = get_candidate_symbols(mdf_cfg)
         logger.info(f"Evaluating {len(symbols)} symbols from ETF master")
 
     signal_side = SignalSide(args.signal_side)
@@ -846,6 +856,7 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
             ctx = build_signal_context(
                 symbol, market_data, signal_cfg,
                 portfolio_context=portfolio_ctx,
+                reference_only=is_market_reference(symbol, roles),
             )
             members = run_signal_committee(ctx, committee_cfg, client=llm_client)
             result = aggregate_signal(symbol, signal_side, members, ctx, signal_cfg, portfolio_ctx)

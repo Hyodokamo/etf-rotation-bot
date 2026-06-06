@@ -120,6 +120,37 @@ def aggregate_signal(
             member_outputs=member_outputs,
         )
 
+    # ── Reference-only symbols: never become BUY_CANDIDATE ────────────────────
+    if signal_ctx.reference_only:
+        risk_flags.append("reference_symbol_not_candidate")
+        final_signal = FinalSignal.WATCH if has_triggers else FinalSignal.NO_ACTION
+        ref_text = (
+            f"このシンボル（{symbol}）は市場参照用シンボルであり、"
+            "AI検証枠の買い候補化対象ではありません。"
+            "市場レジーム・ストレス判定には使用されます。"
+            "自動売買は行いません。最終判断は人間が行います。"
+        )
+        return SignalResult(
+            symbol=symbol,
+            signal_side=signal_side,
+            final_signal=final_signal,
+            confidence=round(avg_conf, 4),
+            total_score=total_score,
+            positive_member_count=positive_count,
+            cautious_member_count=cautious_count,
+            reject_member_count=reject_count,
+            veto_count=veto_count,
+            trigger_labels=trigger_labels,
+            positive_reasons=positive_reasons,
+            risk_flags=risk_flags,
+            veto_flags=veto_flags,
+            dissenting_views=dissenting_views,
+            recommended_action_text=ref_text,
+            watchlist_update=None,
+            next_review_date=None,
+            member_outputs=member_outputs,
+        )
+
     # ── Hard blocks ────────────────────────────────────────────────────────────
     if ai_auditor_veto and rules.block_if_ai_auditor_veto:
         veto_flags.append("ai_auditor_veto_hard_block")

@@ -331,6 +331,58 @@ def parse_args() -> argparse.Namespace:
             "Useful for synthetic crash scenario testing."
         ),
     )
+    # Phase 5.3: Market Data Fetcher — generates data/market_data_latest.csv
+    parser.add_argument(
+        "--update-market-data",
+        action="store_true",
+        default=False,
+        help=(
+            "Fetch live market data and write data/market_data_latest.csv. "
+            "No orders, no auto-trade, no brokerage integration."
+        ),
+    )
+    parser.add_argument(
+        "--market-data-symbols",
+        default=None,
+        help=(
+            "Comma-separated override list of symbols to fetch "
+            "(e.g. SPY,QQQ,ITA). Default: all symbols from config/market_data_config.yaml."
+        ),
+    )
+    parser.add_argument(
+        "--market-data-output",
+        default=None,
+        help="Output path for market_data_latest.csv (default: data/market_data_latest.csv).",
+    )
+    # Phase 5.2: Signal Review / Human Decision Flow
+    parser.add_argument(
+        "--signal-review",
+        action="store_true",
+        default=False,
+        help=(
+            "Show watchlist review summary, or record a human decision on a signal. "
+            "No orders, no auto-trade, no order quantities."
+        ),
+    )
+    parser.add_argument(
+        "--review-symbol",
+        default=None,
+        help="Symbol to record a human decision for (required with --human-signal-decision).",
+    )
+    parser.add_argument(
+        "--human-signal-decision",
+        default=None,
+        choices=sorted([
+            "USER_APPROVED", "USER_REJECTED", "USER_WATCH",
+            "USER_HOLD_OFF", "USER_REQUEST_RERUN", "USER_NOTE_ONLY",
+        ]),
+        help="Human decision to record for the watchlist symbol.",
+    )
+    parser.add_argument(
+        "--human-signal-note",
+        default="",
+        help="Optional note to attach to the human decision.",
+    )
     return parser.parse_args()
 
 
@@ -797,7 +849,7 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
             )
             members = run_signal_committee(ctx, committee_cfg, client=llm_client)
             result = aggregate_signal(symbol, signal_side, members, ctx, signal_cfg, portfolio_ctx)
-            watchlist = update_watchlist_entry(watchlist, result, dry_run=dry_run)
+            watchlist = update_watchlist_entry(watchlist, result, dry_run=dry_run, updated_by="crash_signal_committee")
             append_signal_history(result, "logs/signal_history.csv", dry_run=dry_run)
             results.append(result)
             logger.info(
@@ -849,9 +901,138 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
     logger.info("=== Crash Signal Check completed ===")
 
 
+def _handle_update_market_data(args: argparse.Namespace) -> None:
+    """Phase 5.3: fetch live market data and write data/market_data_latest.csv.
+
+    Advisory only:
+    - No orders, no order quantities, no auto-trade.
+    - No brokerage / securities account integration.
+    - watchlist.csv / signal_history.csv / ai_sleeve_state.csv / etf_master.csv never modified.
+    """
+    from src.signals.market_data_fetcher import (
+        DEFAULT_MARKET_DATA_OUTPUT_PATH,
+        fetch_market_data,
+        write_market_data_latest,
+    )
+
+    run_date = date.fromisoformat(args.date) if args.date else date.today()
+    logger.info(f"=== Market Data Update starting (as_of={run_date}) ===")
+
+    symbols = None
+    if args.market_data_symbols:
+        symbols = [s.strip().upper() for s in args.market_data_symbols.split(",") if s.strip()]
+
+    output_path = args.market_data_output or DEFAULT_MARKET_DATA_OUTPUT_PATH
+    dry_run: bool = getattr(args, "dry_run", False)
+
+    try:
+        rows = fetch_market_data(symbols, as_of_date=run_date.isoformat())
+    except ImportError:
+        print(
+            "Error: yfinance is not installed. Run: pip install yfinance",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    except Exception as exc:
+        logger.error(f"Market data fetch failed: {exc}")
+        print(f"Error: market data fetch failed — {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+    out = write_market_data_latest(rows, path=output_path, dry_run=dry_run)
+
+    ok_count = sum(1 for r in rows if not r.get("notes", "").startswith("error"))
+    err_count = len(rows) - ok_count
+    prefix = "[DRY-RUN] " if dry_run else ""
+    lines = [
+        f"{prefix}Market data updated: {ok_count} symbols OK, {err_count} errors",
+        f"  Output: {out or '(dry-run, not written)'}",
+        f"  Date: {run_date}",
+        "",
+        "注文数量は計算しません。自動売買は行いません。証券口座との連携はありません。",
+    ]
+    if err_count:
+        err_syms = [r["symbol"] for r in rows if r.get("notes", "").startswith("error")]
+        lines.append(f"  Fetch errors: {err_syms}")
+    sys.stdout.buffer.write(("\n".join(lines) + "\n").encode("utf-8", errors="replace"))
+    sys.stdout.buffer.flush()
+    logger.info("=== Market Data Update completed ===")
+
+
+def _handle_signal_review(args: argparse.Namespace) -> None:
+    """Phase 5.2: signal review / human decision flow (advisory only).
+
+    - No orders, no order quantities, no brokerage API calls.
+    - USER_APPROVED / USER_REJECTED are human-only; AI cannot set them.
+    - signal_history.csv is never modified.
+    - Without --human-signal-decision: displays watchlist review summary.
+    - With --review-symbol + --human-signal-decision: records a human decision.
+    """
+    from src.signals.signal_review import (
+        DEFAULT_HUMAN_DECISION_LOG_PATH,
+        build_signal_review_summary,
+        load_watchlist_review_items,
+        record_human_signal_decision,
+    )
+
+    dry_run: bool = getattr(args, "dry_run", False)
+
+    if args.human_signal_decision:
+        # Record human decision
+        if not args.review_symbol:
+            sys.stderr.write(
+                "Error: --review-symbol is required when --human-signal-decision is specified.\n"
+            )
+            raise SystemExit(1)
+
+        try:
+            result = record_human_signal_decision(
+                symbol=args.review_symbol,
+                decision=args.human_signal_decision,
+                note=args.human_signal_note or "",
+                dry_run=dry_run,
+                log_path=DEFAULT_HUMAN_DECISION_LOG_PATH,
+            )
+        except ValueError as e:
+            sys.stderr.write(f"Signal review error: {e}\n")
+            raise SystemExit(1)
+
+        summary_lines = [
+            f"Signal review recorded: {result['symbol']} {result['decision']}",
+            f"  prev_status: {result['prev_status']!r}",
+            f"  new_status:  {result['new_status']!r}",
+            f"  note:        {result['note']!r}",
+            f"  no_order_quantity: {result['no_order_quantity']}",
+            f"  no_auto_trade:     {result['no_auto_trade']}",
+            "",
+            "注文数量は計算しません。自動売買は行いません。最終判断は人間が行います。",
+        ]
+        if dry_run:
+            summary_lines.insert(0, "[DRY-RUN] 実際には記録されていません")
+        sys.stdout.buffer.write(("\n".join(summary_lines) + "\n").encode("utf-8", errors="replace"))
+        sys.stdout.buffer.flush()
+        return
+
+    # List mode: show review summary
+    items = load_watchlist_review_items()
+    summary = build_signal_review_summary(items)
+    sys.stdout.buffer.write(summary.encode("utf-8", errors="replace"))
+    sys.stdout.buffer.write(b"\n")
+    sys.stdout.buffer.flush()
+
+
 def main() -> None:
     load_dotenv()
     args = parse_args()
+
+    # Phase 5.3: market data update — fetch live prices, write market_data_latest.csv
+    if args.update_market_data:
+        _handle_update_market_data(args)
+        return
+
+    # Phase 5.2: signal review / human decision flow
+    if args.signal_review:
+        _handle_signal_review(args)
+        return
 
     # Phase 5.1: crash signal check — advisory only, separate from monthly pipeline
     if args.crash_signal_check:

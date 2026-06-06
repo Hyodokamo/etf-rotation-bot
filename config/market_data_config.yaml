@@ -1,0 +1,24 @@
+market_data:
+  etf_symbols:
+    - SPY
+    - QQQ
+    - SOXX
+    - SMH
+    - GRID
+    - BOTZ
+    - ITA
+    - XLU
+    - PAVE
+    - AVUV
+    - CIBR
+
+  macro:
+    vix_symbol: "^VIX"
+    yield_10y_symbol: "^TNX"
+    dxy_symbol: "DX-Y.NYB"
+
+  output_path: "data/market_data_latest.csv"
+
+  # yfinance history period for indicator calculation
+  # "1y" gives ~252 trading days (needed for 200-DMA and 52-week high)
+  history_period: "1y"

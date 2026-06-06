@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import csv
 import shutil
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from src.logger import logger
@@ -39,6 +39,14 @@ AI_SETTABLE_STATUS = frozenset({
     "WATCH", "BUY_CANDIDATE", "HIGH_PRIORITY_CANDIDATE", "HOLD_OFF", "REJECT_FOR_NOW",
 })
 HUMAN_LOCKED_STATUS = frozenset({"USER_APPROVED", "USER_REJECTED"})
+
+_REVIEW_HORIZON_DAYS: dict[str, int] = {
+    "HIGH_PRIORITY_CANDIDATE": 7,
+    "BUY_CANDIDATE": 7,
+    "WATCH": 14,
+    "HOLD_OFF": 14,
+    "REJECT_FOR_NOW": 30,
+}
 
 
 def load_watchlist(path: str | Path = DEFAULT_WATCHLIST_PATH) -> list[dict]:
@@ -120,7 +128,16 @@ def update_watchlist_entry(
         return rows
 
     now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    horizon = _REVIEW_HORIZON_DAYS.get(new_status, 14)
+    next_review = (date.today() + timedelta(days=horizon)).isoformat()
     ticker = result.symbol.upper()
+
+    trigger_prefix = ""
+    if result.trigger_labels:
+        trigger_prefix = "|".join(result.trigger_labels[:2]) + " → "
+    reason_summary = (trigger_prefix + result.recommended_action_text)[:120]
+    risk_flag_str = "|".join(result.risk_flags[:5])
+
     out: list[dict] = []
     found = False
 
@@ -138,9 +155,10 @@ def update_watchlist_entry(
                     "final_signal": result.final_signal.value,
                     "signal_side": result.signal_side.value,
                     "confidence": f"{result.confidence:.2f}",
-                    "risk_flags": "|".join(result.risk_flags[:3]),
-                    "reason_summary": result.recommended_action_text[:100],
+                    "risk_flags": risk_flag_str,
+                    "reason_summary": reason_summary,
                     "last_reviewed_at": now,
+                    "next_review_date": next_review,
                     "updated_by": updated_by,
                 })
                 out.append(updated)
@@ -155,9 +173,10 @@ def update_watchlist_entry(
             "final_signal": result.final_signal.value,
             "signal_side": result.signal_side.value,
             "confidence": f"{result.confidence:.2f}",
-            "risk_flags": "|".join(result.risk_flags[:3]),
-            "reason_summary": result.recommended_action_text[:100],
+            "risk_flags": risk_flag_str,
+            "reason_summary": reason_summary,
             "last_reviewed_at": now,
+            "next_review_date": next_review,
             "updated_by": updated_by,
         })
         out.append(new_row)

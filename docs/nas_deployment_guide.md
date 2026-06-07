@@ -17,10 +17,10 @@
 - `data/` `logs/` `reports/` `outputs/` はホストの bind-mount で永続化する
 - watchlist.csv の自動更新はデフォルトで行わない（dry-run）
 
-> **Phase 7.0 時点の制限:**  
-> Slack コマンドルーター（`/etf status` 等）と Job Runner は **まだ実装されていません**。  
-> 現在の NAS 運用は「定期的な daily run」と「手動実行」が中心です。  
-> Slack からの操作 UI は Phase 7.1 以降で実装します。
+> **Phase 7.4 更新:**  
+> Slack コマンドルーター (`/etf` slash commands) と Job Runner が実装されました（Phase 7.1–7.4）。  
+> `docker compose up -d slack-bot job-runner` で常駐サービスとして起動できます。  
+> 詳細は [セクション 12: 常駐サービス運用（Slack Bot + Job Runner）](#12-常駐サービス運用slack-bot--job-runner) を参照してください。
 
 ---
 
@@ -401,4 +401,336 @@ for s in d['steps']:
 docker run --rm etf-bot find /app/data -name "*.csv" | sort
 # 期待: etf_master.csv と test_scenarios/*.csv のみ
 # watchlist.csv / market_data_latest.csv / total_portfolio_snapshot.csv が表示されたら .dockerignore を見直す
+```
+
+---
+
+## 12. 常駐サービス運用（Slack Bot + Job Runner）
+
+**Phase 7.4 — NAS Runtime Services**
+
+### 12-1. サービス概要
+
+| サービス名 | 役割 | 起動方式 |
+|-----------|------|--------|
+| `slack-bot` | `/etf` Slack コマンドの受付 + インタラクティブボタン処理 | `restart: unless-stopped`（常駐） |
+| `job-runner` | `job_queue.jsonl` の非同期処理（10 秒間隔ポーリング） | `restart: unless-stopped`（常駐） |
+| `etf-bot` | 日次 daily run（手動 / cron / Task Scheduler 起動） | `docker compose run --rm`（非常駐） |
+
+**通信方式:** `slack-bot` と `job-runner` は同一 bind-mount ボリューム（`logs/`）を共有します。  
+Slack コマンドがジョブをエンキューすると `logs/job_queue.jsonl` に書き込まれ、  
+`job-runner` が定期的に読み取って処理します。IPC なし・ポート不要。
+
+**必要な `.env` 設定（Slack Bot 用）:**
+
+```bash
+SLACK_BOT_TOKEN=xoxb-...          # Bot OAuth Token
+SLACK_APP_TOKEN=xapp-...          # App-Level Token (Socket Mode)
+SLACK_ALLOWED_USER_IDS=U1234,U5678  # 許可ユーザー ID（省略可）
+SLACK_CHANNEL_ID=C1234567890      # ボタン付きメッセージ送信チャンネル（省略可）
+```
+
+---
+
+### 12-2. 常駐サービスの起動
+
+```bash
+# Image のビルド（初回または Dockerfile 変更後）
+docker compose build
+
+# slack-bot と job-runner を常駐起動
+docker compose up -d slack-bot job-runner
+
+# 起動確認
+docker compose ps
+# 両サービスが "Up" と表示されることを確認
+```
+
+個別起動:
+
+```bash
+docker compose up -d slack-bot   # Slack Bot のみ
+docker compose up -d job-runner  # Job Runner のみ
+```
+
+---
+
+### 12-3. 常駐サービスの停止
+
+```bash
+# 両サービスを停止
+docker compose stop slack-bot job-runner
+
+# 完全削除（コンテナ・ネットワーク）
+docker compose down
+
+# ボリュームは削除しない（bind-mount のため host 側は保持される）
+```
+
+---
+
+### 12-4. ログの確認
+
+#### Docker Compose ログ
+
+```bash
+# Slack Bot のリアルタイムログ
+docker compose logs -f slack-bot
+
+# Job Runner のリアルタイムログ
+docker compose logs -f job-runner
+
+# 直近 50 行
+docker compose logs --tail=50 slack-bot
+docker compose logs --tail=50 job-runner
+```
+
+#### ファイルログ
+
+```bash
+# Job キュー（エンキュー済みジョブ一覧）
+tail -20 logs/job_queue.jsonl
+
+# Job ステータス（最新状態確認）
+tail -20 logs/job_status.jsonl
+
+# 日次実行ログ
+tail -20 logs/scheduler_run_log.jsonl
+
+# シグナル人間判断ログ
+tail -20 logs/signal_human_decision_log.jsonl
+```
+
+#### ジョブステータスのワンライナー確認
+
+```bash
+python -c "
+import json
+lines = open('logs/job_status.jsonl', encoding='utf-8').readlines()
+for l in lines[-10:]:
+    d = json.loads(l)
+    print(d.get('job_id','')[:8], d.get('status'), d.get('updated_at','')[:16])
+"
+```
+
+---
+
+### 12-5. Slack Bot の動作確認
+
+常駐起動後、Slack ワークスペースで以下を実行してください:
+
+```
+/etf help                   → コマンド一覧表示
+/etf status                 → AI検証枠 現在状態
+/etf signals                → 最新シグナルダイジェスト
+/etf overdue                → 確認期限超過・近日確認
+/etf candidate ITA          → 候補レビュージョブのエンキュー (dry-run)
+/etf signal QTUM            → シグナル確認ジョブのエンキュー (dry-run)
+/etf update-market-data     → market data 更新ジョブのエンキュー
+/etf run daily              → 日次シグナルチェックジョブのエンキュー
+/etf job <JOB_ID>           → ジョブの実行状態確認
+```
+
+**期待動作:**
+- 全コマンドが ephemeral（自分だけ見える）メッセージで返答される
+- `/etf candidate ITA` → Job ID が返る
+- `/etf job <JOB_ID>` → QUEUED → RUNNING → SUCCESS/FAILED の状態変化が確認できる
+
+---
+
+### 12-6. Job Runner の動作確認
+
+```bash
+# job_queue.jsonl に QUEUED エントリが書き込まれていること
+grep '"status": "QUEUED"' logs/job_queue.jsonl | tail -5
+
+# job_status.jsonl で RUNNING → SUCCESS/FAILED に遷移していること
+grep '"status"' logs/job_status.jsonl | tail -20
+
+# ジョブが正常に完了したかチェック
+python -c "
+import json
+lines = open('logs/job_status.jsonl', encoding='utf-8').readlines()
+last = json.loads(lines[-1])
+print('Job ID:', last['job_id'][:8])
+print('Status:', last['status'])
+print('no_auto_trade:', last.get('no_auto_trade'))
+print('no_order_quantity:', last.get('no_order_quantity'))
+"
+```
+
+**安全フラグの確認（全ジョブエントリに必須）:**
+
+```bash
+python -c "
+import json
+lines = open('logs/job_status.jsonl', encoding='utf-8').readlines()
+for l in lines:
+    d = json.loads(l)
+    assert d.get('no_auto_trade') is True, f'no_auto_trade missing: {d}'
+    assert d.get('no_order_quantity') is True, f'no_order_quantity missing: {d}'
+print('Safety OK: all', len(lines), 'entries have no_auto_trade=True')
+"
+```
+
+---
+
+### 12-7. 日次実行（Task Scheduler / cron）
+
+daily_signal_check は **常駐サービスではなく**、NAS Task Scheduler / cron から定期起動します。
+
+#### Synology Task Scheduler
+
+管理 → タスクスケジューラ → 作成 → ユーザー定義スクリプト:
+
+```
+スケジュール: 毎日 07:30（平日のみ）
+スクリプト:
+  cd /path/to/etf-rotation-bot
+  docker compose run --rm etf-bot python scripts/daily_signal_check.py --no-slack
+```
+
+**重要:** `--allow-watchlist-update` は日次自動実行に使わないでください。  
+watchlist の更新は Slack の `review` ボタン、または手動コマンドで行います。
+
+#### Linux cron
+
+```bash
+# crontab -e で追記（平日 07:30 JST）
+30 7 * * 1-5 cd /path/to/etf-rotation-bot && docker compose run --rm etf-bot python scripts/daily_signal_check.py --no-slack >> logs/cron.log 2>&1
+```
+
+#### docker compose run オプション例
+
+```bash
+# 基本（dry-run, Slack なし）
+docker compose run --rm etf-bot python scripts/daily_signal_check.py --no-slack
+
+# market data も更新する場合（フル実行）
+docker compose run --rm etf-bot python scripts/daily_signal_check.py
+
+# skip market data（既存データで実行）
+docker compose run --rm etf-bot python scripts/daily_signal_check.py --skip-market-data --no-slack
+```
+
+---
+
+### 12-8. 障害対応
+
+#### Slack コマンドが返ってこない
+
+```bash
+# 1. Slack Bot のログを確認
+docker compose logs --tail=50 slack-bot
+
+# 2. サービスが起動しているか確認
+docker compose ps slack-bot
+
+# 3. SLACK_BOT_TOKEN / SLACK_APP_TOKEN が .env に設定されているか確認
+grep -E "SLACK_(BOT|APP)_TOKEN" .env
+
+# 4. 再起動
+docker compose restart slack-bot
+```
+
+#### ジョブが QUEUED のまま進まない
+
+```bash
+# 1. Job Runner が起動しているか確認
+docker compose ps job-runner
+
+# 2. Job Runner のログを確認
+docker compose logs --tail=50 job-runner
+
+# 3. ロックファイルが残っていないか確認（前の runner が異常終了した場合）
+cat logs/.job_runner.lock  # PID が表示される
+# プロセスが存在しないなら削除して良い
+rm -f logs/.job_runner.lock
+
+# 4. Job Runner を再起動
+docker compose restart job-runner
+```
+
+#### job-runner が落ちている（repeatedly exiting）
+
+```bash
+# Exit コードを確認
+docker compose ps job-runner  # State: Exited (N)
+
+# ログで原因を確認
+docker compose logs job-runner
+
+# よくある原因:
+# - ANTHROPIC_API_KEY 未設定（candidate_review など AI 委員会ジョブが必要）
+# - Python モジュールが見つからない → docker compose build でイメージを再ビルド
+# - 文字コードエラー → Dockerfile や requirements.txt の見直し
+```
+
+#### Slack Token 不備
+
+```bash
+# Socket Mode には SLACK_BOT_TOKEN と SLACK_APP_TOKEN の両方が必要
+grep -E "SLACK_(BOT|APP)_TOKEN" .env
+# どちらかが空・未設定の場合、slack-bot は起動後すぐに終了します
+# Slack App Settings で Socket Mode が有効になっているか確認してください
+```
+
+#### market data 取得失敗
+
+```bash
+# market data 更新をスキップして daily run
+docker compose run --rm etf-bot \
+  python scripts/daily_signal_check.py --skip-market-data --no-slack
+
+# または job-runner 経由で market data のみ更新
+# /etf update-market-data を Slack から実行
+```
+
+#### OpenAI / Claude API エラー
+
+- `ANTHROPIC_API_KEY` の有効期限・クォータを確認（Anthropic Console）
+- rate limit なら数分後に再実行
+- committee が INSUFFICIENT_DATA を返しても日次 run 自体は SUCCESS になります
+
+---
+
+### 12-9. 安全運用まとめ
+
+| 項目 | 保証内容 |
+|------|---------|
+| 自動売買なし | Bot は投資判断の補助のみ。注文は一切実行しません |
+| 注文数量計算なし | 株数・口数の計算は行いません |
+| 証券口座連携なし | 楽天証券・SBI 等への API 接続は実装されていません |
+| 最終判断は人間 | USER_APPROVED は「候補として確認済み」であり「買付承認」ではありません |
+| Slack からの任意実行なし | job_type は固定ホワイトリスト。Slack テキストをシェルに渡しません |
+| shell=True 不使用 | 全 subprocess は固定コマンドリストで実行します |
+| --allow-watchlist-update 禁止 | Slack / job-runner 経由では watchlist の自動更新は不可 |
+| 秘密情報のログ除外 | api_key / token / secret 等のキーは JSONL ログから除外されます |
+| no_auto_trade フラグ | 全ジョブエントリに `no_auto_trade: true` を記録します |
+| no_order_quantity フラグ | 全ジョブエントリに `no_order_quantity: true` を記録します |
+
+**日次確認推奨コマンド:**
+
+```bash
+# 最新ジョブの安全フラグ確認
+python -c "
+import json
+lines = open('logs/job_status.jsonl', encoding='utf-8').readlines()
+if lines:
+    d = json.loads(lines[-1])
+    print('no_auto_trade:', d.get('no_auto_trade'))
+    print('no_order_quantity:', d.get('no_order_quantity'))
+    print('brokerage_connection:', d.get('brokerage_connection', False))
+"
+
+# 最新 daily run の安全フラグ確認
+python -c "
+import json
+lines = open('logs/scheduler_run_log.jsonl', encoding='utf-8').readlines()
+if lines:
+    d = json.loads(lines[-1])
+    print('status:', d['status'])
+    print('no_auto_trade:', d.get('no_auto_trade'))
+    print('no_order_quantity:', d.get('no_order_quantity'))
+"
 ```

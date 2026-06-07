@@ -1,4 +1,9 @@
 services:
+  # ── etf-bot: ad-hoc / cron daily runner (NOT a persistent service) ────────────
+  # Use `docker compose run --rm etf-bot <args>` for manual or scheduled runs.
+  # Use Synology Task Scheduler / Linux cron to call this for daily execution.
+  # --allow-watchlist-update is intentionally absent from the default command.
+  # No auto-trade, no order quantity, no brokerage connection.
   etf-bot:
     build: .
     # Load all secrets/keys from .env (never baked into the image)
@@ -7,7 +12,7 @@ services:
       TZ: Asia/Tokyo
     # Persist runtime state outside the container image.
     # data/   — watchlist.csv, market_data_latest.csv, etf_master.csv, personal CSVs
-    # logs/   — scheduler_run_log.jsonl, signal_history.csv, decision logs
+    # logs/   — scheduler_run_log.jsonl, signal_history.csv, decision logs, job JSONL
     # reports/— daily_signal_report.md, audit reports
     # outputs/— monthly reports, bot.log, committee JSON
     volumes:
@@ -15,42 +20,61 @@ services:
       - ./logs:/app/logs
       - ./reports:/app/reports
       - ./outputs:/app/outputs
-    # Safe default: dry-run signal check without Slack.
-    # Override with `docker compose run --rm etf-bot <args>` for ad-hoc runs.
-    # --allow-watchlist-update is intentionally absent — watchlist.csv not modified by default.
+    # Safe default: dry-run signal check without Slack posting.
+    # Override with `docker compose run --rm etf-bot python scripts/daily_signal_check.py`
     command: ["python", "scripts/daily_signal_check.py", "--no-slack"]
 
-  # ── Optional services (Phase 7.1-7.3) ────────────────────────────────────────
-  # Uncomment to enable Slack Socket Mode listener and/or async job runner.
-  # Both services share the same volumes so jobs enqueued by the Slack bot
-  # are picked up by the job runner without any additional IPC.
+  # ── slack-bot: persistent Slack Socket Mode listener ─────────────────────────
+  # Handles /etf slash commands and interactive button actions from Slack.
+  # Requires SLACK_BOT_TOKEN, SLACK_APP_TOKEN in .env (Socket Mode credentials).
+  # Optional: SLACK_ALLOWED_USER_IDS (comma-separated), SLACK_CHANNEL_ID
   #
-  # Safety: --allow-watchlist-update is never passed by the job runner.
-  #         No auto-trade, no brokerage connection, no NISA automation.
+  # Start: docker compose up -d slack-bot
+  # Stop:  docker compose stop slack-bot
+  # Logs:  docker compose logs -f slack-bot
   #
-  # slack-bot:
-  #   build: .
-  #   env_file: .env
-  #   environment:
-  #     TZ: Asia/Tokyo
-  #   volumes:
-  #     - ./data:/app/data
-  #     - ./logs:/app/logs
-  #     - ./reports:/app/reports
-  #     - ./outputs:/app/outputs
-  #   command: ["python", "src/slack_interaction_handler.py"]
-  #   restart: unless-stopped
+  # Safety: No auto-trade, no order quantity, no brokerage connection.
+  #         Job commands (candidate/signal/run) only enqueue to job_queue.jsonl.
+  #         Shell=True is never used. --allow-watchlist-update cannot be triggered via Slack.
+  slack-bot:
+    build: .
+    env_file: .env
+    environment:
+      TZ: Asia/Tokyo
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+      - ./outputs:/app/outputs
+    command: ["python", "src/slack_interaction_handler.py"]
+    restart: unless-stopped
+
+  # ── job-runner: persistent async job processor ───────────────────────────────
+  # Polls logs/job_queue.jsonl every 10 seconds and executes QUEUED jobs.
+  # Communicates with slack-bot via shared bind-mounted volumes (no IPC needed).
+  # Uses a lock file (logs/.job_runner.lock) to prevent concurrent runners.
   #
-  # job-runner:
-  #   build: .
-  #   env_file: .env
-  #   environment:
-  #     TZ: Asia/Tokyo
-  #   volumes:
-  #     - ./data:/app/data
-  #     - ./logs:/app/logs
-  #     - ./reports:/app/reports
-  #     - ./outputs:/app/outputs
-  #   # --loop: polls for new jobs every 10 s; --allow-watchlist-update is never passed
-  #   command: ["python", "scripts/run_job_worker.py", "--loop"]
-  #   restart: unless-stopped
+  # Start: docker compose up -d job-runner
+  # Stop:  docker compose stop job-runner
+  # Logs:  docker compose logs -f job-runner
+  # Queue: cat logs/job_queue.jsonl | tail -20
+  # Status: cat logs/job_status.jsonl | tail -20
+  #
+  # Job types: candidate_review / signal_check / update_market_data / daily_signal_check
+  # All jobs: no_auto_trade=True, no_order_quantity=True, brokerage_connection=False
+  # --allow-watchlist-update is NEVER passed to any job command.
+  job-runner:
+    build: .
+    env_file: .env
+    environment:
+      TZ: Asia/Tokyo
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+      - ./outputs:/app/outputs
+    # --loop: polls job_queue.jsonl every 10 s for new QUEUED jobs
+    # No auto-trade, no order quantity, no brokerage connection
+    # --allow-watchlist-update is never passed
+    command: ["python", "scripts/run_job_worker.py", "--loop"]
+    restart: unless-stopped

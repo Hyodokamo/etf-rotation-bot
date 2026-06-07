@@ -20,8 +20,13 @@ services:
     # --allow-watchlist-update is intentionally absent — watchlist.csv not modified by default.
     command: ["python", "scripts/daily_signal_check.py", "--no-slack"]
 
-  # ── Future services (Phase 7.1+) ─────────────────────────────────────────────
-  # Uncomment when Slack command router and job runner are implemented.
+  # ── Optional services (Phase 7.1-7.3) ────────────────────────────────────────
+  # Uncomment to enable Slack Socket Mode listener and/or async job runner.
+  # Both services share the same volumes so jobs enqueued by the Slack bot
+  # are picked up by the job runner without any additional IPC.
+  #
+  # Safety: --allow-watchlist-update is never passed by the job runner.
+  #         No auto-trade, no brokerage connection, no NISA automation.
   #
   # slack-bot:
   #   build: .
@@ -46,5 +51,6 @@ services:
   #     - ./logs:/app/logs
   #     - ./reports:/app/reports
   #     - ./outputs:/app/outputs
-  #   command: ["python", "src/job_runner.py"]
+  #   # --loop: polls for new jobs every 10 s; --allow-watchlist-update is never passed
+  #   command: ["python", "scripts/run_job_worker.py", "--loop"]
   #   restart: unless-stopped

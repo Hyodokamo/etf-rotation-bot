@@ -91,6 +91,10 @@ def test_dockerignore_excludes_personal_csv():
     """dockerignore must exclude personal / runtime-state CSV files."""
     content = _read(_DOCKERIGNORE)
     assert "watchlist.csv" in content, "watchlist.csv must be in .dockerignore"
+    assert "watchlist_candidates.csv" in content, (
+        "watchlist_candidates.csv must be in .dockerignore "
+        "(contains personal investment amounts/accounts)"
+    )
     assert "market_data_latest.csv" in content, "market_data_latest.csv must be in .dockerignore"
     assert "total_portfolio_snapshot.csv" in content, "total_portfolio_snapshot.csv must be in .dockerignore"
     assert "ai_sleeve_state.csv" in content, "ai_sleeve_state.csv must be in .dockerignore"

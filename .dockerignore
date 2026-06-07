@@ -23,6 +23,7 @@ outputs/
 
 # ── Personal portfolio data (NEVER in image) ──────────────────────────────────
 data/watchlist.csv
+data/watchlist_candidates.csv
 data/market_data_latest.csv
 data/total_portfolio_snapshot.csv
 data/ai_sleeve_state.csv

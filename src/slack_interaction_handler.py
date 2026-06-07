@@ -32,7 +32,15 @@ from dotenv import load_dotenv
 from src.logger import logger
 from src.slack_action_router import route_action, route_note_submission
 from src.slack_actions import build_action_value, extract_action, is_note_action
+from src.slack_command_router import handle_etf_command
 from src.slack_modals import build_note_modal_from_action_value, extract_human_note
+from src.slack_signal_actions import (
+    SIGNAL_NOTE_ACTION,
+    SIGNAL_NOTE_MODAL_CALLBACK_ID,
+    build_signal_note_modal_from_value,
+    route_signal_action,
+    route_signal_note_submission,
+)
 
 
 def interactivity_enabled() -> bool:
@@ -134,6 +142,54 @@ def _run_socket_mode() -> None:  # pragma: no cover - requires slack_bolt + netw
         except Exception as e:  # never crash the listener
             logger.error(f"Slack action handling error: {type(e).__name__}: {e}")
             respond(text="処理中にエラーが発生しました。", response_type="ephemeral")
+
+    @app.action(re.compile(r"^signal_"))
+    def _on_signal_action(ack, body, client, respond):
+        ack()  # ack immediately
+        try:
+            actions = body.get("actions") or []
+            action = actions[0] if actions else {}
+            action_id = action.get("action_id", "")
+            value = action.get("value", "")
+            user_id = body.get("user_id") or (body.get("user") or {}).get("id", "")
+
+            if action_id == SIGNAL_NOTE_ACTION:
+                modal = build_signal_note_modal_from_value(value, user_id=user_id)
+                client.views_open(trigger_id=body["trigger_id"], view=modal)
+                return
+
+            result = route_signal_action(
+                action_id, value, user_id, allowed_users=allowed_users
+            )
+            respond(text=result.message, response_type="ephemeral", replace_original=False)
+        except Exception as e:  # never crash the listener
+            logger.error(f"Slack signal action error: {type(e).__name__}: {e}")
+            respond(text="処理中にエラーが発生しました。", response_type="ephemeral")
+
+    @app.view(SIGNAL_NOTE_MODAL_CALLBACK_ID)
+    def _on_signal_note_submit(ack, body, view):
+        ack()
+        try:
+            user_id = (body.get("user") or {}).get("id", "")
+            result = route_signal_note_submission(view, user_id, allowed_users=allowed_users)
+            logger.info(f"Signal note submission: {result.message}")
+        except Exception as e:  # never crash the listener
+            logger.error(f"Slack signal note submission error: {type(e).__name__}: {e}")
+
+    @app.command("/etf")
+    def _on_etf_command(ack, body, respond):
+        ack()  # ack immediately — Slack requires < 3 s
+        try:
+            user_id = body.get("user_id") or (body.get("user") or {}).get("id", "")
+            text = body.get("text", "")
+            result = handle_etf_command(text, user_id, allowed_users=allowed_users)
+            if result.blocks:
+                respond(blocks=result.blocks, text=result.text, response_type="ephemeral")
+            else:
+                respond(text=result.text, response_type="ephemeral")
+        except Exception as e:  # never crash the listener
+            logger.error(f"Slack /etf command error: {type(e).__name__}: {e}")
+            respond(text="コマンド処理中にエラーが発生しました。", response_type="ephemeral")
 
     @app.view(NOTE_MODAL_CALLBACK_ID)
     def _on_note_submit(ack, body, view):

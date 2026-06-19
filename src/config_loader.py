@@ -11,6 +11,9 @@ class AssetConfig(BaseModel):
     display_name: str
     category: str
     include_stage: Literal["production", "watch"]
+    role: str = "standard"
+    include_in_momentum_ranking: bool = True
+    include_in_fallback: bool = False
 
 
 class UniverseConfig(BaseModel):
@@ -57,7 +60,30 @@ class RiskConfig(BaseModel):
 
 
 class TurnoverConfig(BaseModel):
-    max_turnover: float = 0.50
+    normal_limit: float = 0.20
+    migration_limit: float = 0.50
+    migration_mode: bool = False
+    max_turnover: float | None = None  # deprecated; kept for backward compat
+
+    @property
+    def effective_limit(self) -> float:
+        """Return the turnover limit to enforce: legacy max_turnover > migration > normal."""
+        if self.max_turnover is not None:
+            return self.max_turnover
+        return self.migration_limit if self.migration_mode else self.normal_limit
+
+    @property
+    def mode_label(self) -> str:
+        return "移行運用" if self.migration_mode else "通常運用"
+
+
+class RiskModeCheckConfig(BaseModel):
+    enabled: bool = True
+    risk_on_defensive_warning_threshold: float = 0.60
+    risk_on_defensive_review_threshold: float = 0.75
+    defensive_categories: list[str] = Field(
+        default_factory=lambda: ["bond", "cash_like", "commodity", "fx"]
+    )
 
 
 class ReportConfig(BaseModel):
@@ -73,8 +99,37 @@ class DataConfig(BaseModel):
 
 class AiAuditConfig(BaseModel):
     enabled: bool = False
+    provider: Literal["claude", "openai", "gemini"] = "claude"
     model: str = "claude-3-5-sonnet-latest"
     apply_adjustment: bool = False
+
+
+class GlobalSettings(BaseModel):
+    max_portfolio_assets: int = 4
+
+
+class PreTradeGateConfig(BaseModel):
+    enabled: bool = True
+    single_asset_limit: float | None = None  # None → use risk.max_weight_per_asset
+    category_limits: dict[str, float] = Field(default_factory=dict)  # empty → use risk.max_category_weights
+
+
+class StrategyVariantConfig(BaseModel):
+    name: str = "baseline_current"  # baseline_current | cash_fallback_separated
+    exclude_cash_like_from_ranking: bool = False
+    exclude_fx_from_ranking: bool = False
+    volatility_floor_enabled: bool = False
+    volatility_floor: float = 0.05
+
+
+class SlackReviewDecisionConfig(BaseModel):
+    enabled: bool = True
+    mode: str = "review_decision"
+    interactive_enabled: bool = False
+    allow_manual_override: bool = True
+    require_comment_on_manual_override: bool = True
+    require_comment_on_fail_gate: bool = True
+    decision_log_dir: str = "outputs"
 
 
 class AppConfig(BaseModel):
@@ -83,9 +138,14 @@ class AppConfig(BaseModel):
     allocation: AllocationConfig = Field(default_factory=AllocationConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     turnover: TurnoverConfig = Field(default_factory=TurnoverConfig)
+    risk_mode_checks: RiskModeCheckConfig = Field(default_factory=RiskModeCheckConfig)
+    pre_trade_gate: PreTradeGateConfig = Field(default_factory=PreTradeGateConfig)
+    strategy_variant: StrategyVariantConfig = Field(default_factory=StrategyVariantConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
     data: DataConfig = Field(default_factory=DataConfig)
     ai_audit: AiAuditConfig = Field(default_factory=AiAuditConfig)
+    global_settings: GlobalSettings = Field(default_factory=GlobalSettings)
+    slack_review_decision: SlackReviewDecisionConfig = Field(default_factory=SlackReviewDecisionConfig)
 
     def production_assets(self) -> list[AssetConfig]:
         return [a for a in self.universe.assets if a.include_stage == "production"]

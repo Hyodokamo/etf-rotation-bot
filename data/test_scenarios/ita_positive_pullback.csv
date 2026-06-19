@@ -1,0 +1,4 @@
+symbol,as_of_date,last_price,daily_return_pct,return_5d_pct,return_20d_pct,drawdown_from_52w_high_pct,above_200dma,rsi_14,volume_ratio,vix_level,us10y_yield,dxy_level,notes
+SPY,2026-06-06,520.00,-2.50,-4.00,-6.00,-5.50,false,43,1.5,28.0,4.6,105.5,broad market correction
+QQQ,2026-06-06,452.00,-3.50,-5.50,-9.00,-9.50,false,39,1.7,,,,
+ITA,2026-06-06,125.00,-5.00,-8.00,-14.00,-22.00,false,28,2.2,,,,defense deep pullback excellent entry

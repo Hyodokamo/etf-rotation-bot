@@ -67,3 +67,38 @@ def test_risk_gate_sp500_return_stored(cfg):
     result = evaluate_risk_gate(prices, cfg)
     assert result.sp500_return is not None
     assert result.sp500_return > 0
+
+
+def test_apply_risk_gate_no_new_tickers():
+    """Risk gate must not add tickers that weren't already in the portfolio."""
+    gate = RiskGateResult(risk_off=True, sp500_return=-0.10, message="risk off")
+    # Portfolio has no cash_like position
+    weights = {"VOO": 0.70, "TLT": 0.30}
+    # Universe has SGOV (cash_like) but it is NOT in portfolio
+    cat_map = {"VOO": "core_equity", "TLT": "bond", "SGOV": "cash_like"}
+    result = apply_risk_gate(weights, cat_map, gate, equity_cap=0.40)
+    # SGOV must NOT appear in the result
+    assert "SGOV" not in result
+    assert set(result.keys()) == {"VOO", "TLT"}
+
+
+def test_apply_risk_gate_equity_cap_no_cash_portfolio():
+    """Equity cap is respected even when no cash ticker is in the portfolio."""
+    gate = RiskGateResult(risk_off=True, sp500_return=-0.10, message="risk off")
+    weights = {"VOO": 0.70, "TLT": 0.30}
+    cat_map = {"VOO": "core_equity", "TLT": "bond", "SGOV": "cash_like"}
+    result = apply_risk_gate(weights, cat_map, gate, equity_cap=0.40)
+    equity = sum(w for t, w in result.items() if cat_map.get(t) in EQUITY_CATEGORIES)
+    assert equity <= 0.40 + 1e-9
+    assert abs(sum(result.values()) - 1.0) < 1e-9
+
+
+def test_apply_risk_gate_redistributes_to_existing_cash():
+    """Excess equity weight goes to cash tickers already in the portfolio."""
+    gate = RiskGateResult(risk_off=True, sp500_return=-0.10, message="risk off")
+    weights = {"VOO": 0.70, "TLT": 0.20, "SGOV": 0.10}
+    cat_map = {"VOO": "core_equity", "TLT": "bond", "SGOV": "cash_like"}
+    result = apply_risk_gate(weights, cat_map, gate, equity_cap=0.40)
+    # SGOV weight must have increased (received the excess)
+    assert result["SGOV"] > weights["SGOV"]
+    assert abs(sum(result.values()) - 1.0) < 1e-9

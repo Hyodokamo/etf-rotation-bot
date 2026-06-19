@@ -1,0 +1,52 @@
+market_data:
+  # Symbol list with roles.
+  # role:
+  #   market_reference  — used for market_regime / stress calculation; never buy-candidate
+  #   candidate         — active buy-candidate universe (AI検証枠対象)
+  #   benchmark         — reference only; not a buy-candidate
+  #   macro_indicator   — macro data; not a buy-candidate
+  symbols:
+    - symbol: SPY
+      role: market_reference
+      purpose: market_regime
+    - symbol: QQQ
+      role: market_reference
+      purpose: growth_regime
+    - symbol: SOXX
+      role: market_reference
+      purpose: semiconductor_stress
+    - symbol: SMH
+      role: market_reference
+      purpose: semiconductor_stress
+    - symbol: GRID
+      role: candidate
+      purpose: active_core_candidate
+    - symbol: BOTZ
+      role: candidate
+      purpose: active_core_candidate
+    - symbol: ITA
+      role: candidate
+      purpose: active_core_candidate
+    - symbol: XLU
+      role: candidate
+      purpose: active_core_candidate
+    - symbol: PAVE
+      role: candidate
+      purpose: active_core_candidate
+    - symbol: AVUV
+      role: candidate
+      purpose: active_core_candidate
+    - symbol: CIBR
+      role: candidate
+      purpose: active_core_candidate
+
+  macro:
+    vix_symbol: "^VIX"
+    yield_10y_symbol: "^TNX"
+    dxy_symbol: "DX-Y.NYB"
+
+  output_path: "data/market_data_latest.csv"
+
+  # yfinance history period for indicator calculation
+  # "1y" gives ~252 trading days (needed for 200-DMA and 52-week high)
+  history_period: "1y"

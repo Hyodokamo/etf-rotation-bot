@@ -1,0 +1,43 @@
+# ── Secrets / environment ──────────────────────────────────────────────────────
+.env
+.env.local
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+.venv/
+venv/
+
+# ── Python bytecode ────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Git history ────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Runtime state (logs / reports / outputs) ──────────────────────────────────
+# These are bind-mounted at runtime; never bake them into the image.
+logs/
+reports/
+outputs/
+
+# ── Personal portfolio data (NEVER in image) ──────────────────────────────────
+data/watchlist.csv
+data/watchlist_candidates.csv
+data/market_data_latest.csv
+data/total_portfolio_snapshot.csv
+data/ai_sleeve_state.csv
+data/ai_sleeve_state_*.csv
+data/archive/
+
+# ── OS / editor artefacts ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.mypy_cache/
+.pytest_cache/
+
+# ── Development / CI ──────────────────────────────────────────────────────────
+tests/
+docs/
+*.md

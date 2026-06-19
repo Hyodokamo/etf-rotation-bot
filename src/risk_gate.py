@@ -48,28 +48,46 @@ def apply_risk_gate(
     gate: RiskGateResult,
     equity_cap: float,
 ) -> dict[str, float]:
-    """Cap total equity weight when risk-off, redistributing to cash-like assets."""
+    """Cap total equity weight when risk-off, redistributing excess within the current portfolio.
+
+    Excess weight is redistributed only to tickers already held (cash_like first,
+    then other non-equity proportionally). No new tickers are added to the portfolio.
+    """
     if not gate.risk_off:
         return weights
 
     adjusted = dict(weights)
-    equity_tickers = [t for t, c in ticker_to_category.items() if c in EQUITY_CATEGORIES]
-    total_equity = sum(adjusted.get(t, 0.0) for t in equity_tickers)
+    equity_tickers = [t for t in adjusted if ticker_to_category.get(t) in EQUITY_CATEGORIES]
+    total_equity = sum(adjusted[t] for t in equity_tickers)
 
     if total_equity <= equity_cap:
         return adjusted
 
     scale = equity_cap / total_equity
     excess = total_equity - equity_cap
-    cash_tickers = [t for t, c in ticker_to_category.items() if c == "cash_like"]
 
     for t in equity_tickers:
-        adjusted[t] = adjusted.get(t, 0.0) * scale
+        adjusted[t] *= scale
 
-    if cash_tickers:
-        per_cash = excess / len(cash_tickers)
-        for t in cash_tickers:
-            adjusted[t] = adjusted.get(t, 0.0) + per_cash
+    # Redistribute excess to cash_like positions already in the portfolio
+    cash_in_portfolio = [t for t in adjusted if ticker_to_category.get(t) == "cash_like"]
+    if cash_in_portfolio:
+        per_cash = excess / len(cash_in_portfolio)
+        for t in cash_in_portfolio:
+            adjusted[t] += per_cash
+    else:
+        # No cash held — redistribute proportionally to non-equity positions
+        non_equity = [t for t in adjusted if t not in equity_tickers]
+        total_non_equity = sum(adjusted[t] for t in non_equity)
+        if total_non_equity > 0:
+            for t in non_equity:
+                adjusted[t] += excess * (adjusted[t] / total_non_equity)
+        # else: all-equity portfolio; normalize will handle the residual
+
+    # Always normalize to guarantee weights sum exactly to 1.0
+    total = sum(adjusted.values())
+    if total > 0:
+        adjusted = {t: w / total for t, w in adjusted.items()}
 
     logger.info(f"Risk gate applied: equity scaled from {total_equity:.1%} to {equity_cap:.1%}")
     return adjusted

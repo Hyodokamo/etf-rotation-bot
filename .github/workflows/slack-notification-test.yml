@@ -2,8 +2,6 @@
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 0 * * *"  # 毎日09:00 JST
 
 jobs:
   notify:
@@ -15,5 +13,5 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           curl -X POST -H 'Content-type: application/json' \
-            --data '{"text":"GitHub ActionsからSlack通知のテストです。"}' \
+            --data '{"text":"GitHub ActionsからSlack通知の手動テストです。"}' \
             "$SLACK_WEBHOOK_URL"

@@ -15,6 +15,8 @@ def build_audit_context(
     prev_weights: dict[str, float] | None,
     turnover: float | None,
     run_date: date,
+    risk_mode_check=None,
+    pre_trade_gate=None,
 ) -> dict:
     asset_map = {a.ticker: a for a in cfg.universe.assets}
     cat_map = {a.ticker: a.category for a in cfg.universe.assets}
@@ -42,7 +44,7 @@ def build_audit_context(
     bond_weight = sum(w for t, w in weights.items() if cat_map.get(t) == "bond")
     cash_weight = sum(w for t, w in weights.items() if cat_map.get(t) == "cash_like")
 
-    return {
+    context: dict = {
         "run_date": run_date.isoformat(),
         "risk_mode": "risk_off" if risk_gate.risk_off else "risk_on",
         "sp500_return_60d": round(risk_gate.sp500_return, 4) if risk_gate.sp500_return is not None else None,
@@ -57,6 +59,20 @@ def build_audit_context(
         "constraints": {
             "max_weight_per_asset": cfg.risk.max_weight_per_asset,
             "max_category_weights": cfg.risk.max_category_weights,
-            "max_turnover": cfg.turnover.max_turnover,
+            "effective_turnover_limit": cfg.turnover.effective_limit,
+            "turnover_mode": cfg.turnover.mode_label,
         },
     }
+
+    if risk_mode_check is not None and risk_mode_check.enabled:
+        context["risk_mode_consistency"] = {
+            "risk_mode": risk_mode_check.risk_mode,
+            "defensive_weight": round(risk_mode_check.defensive_weight, 4),
+            "status": risk_mode_check.status,
+            "message": risk_mode_check.message,
+        }
+
+    if pre_trade_gate is not None and pre_trade_gate.enabled:
+        context["pre_trade_gate"] = pre_trade_gate.to_dict()
+
+    return context

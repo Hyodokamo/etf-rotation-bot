@@ -21,6 +21,13 @@ def build_report(
     turnover: float | None,
     run_date: date | None = None,
     audit_result=None,
+    proposed_turnover: float | None = None,
+    risk_mode_check=None,
+    pre_trade_gate=None,
+    strategy_variant: str | None = None,
+    committee_result=None,
+    committee_comparison=None,
+    committee_advisory=None,
 ) -> str:
     if run_date is None:
         run_date = date.today()
@@ -30,6 +37,8 @@ def build_report(
 
     lines.append(f"# ETF Rotation Bot — Monthly Report")
     lines.append(f"**実行日:** {run_date.isoformat()}")
+    variant_label = strategy_variant or cfg.strategy_variant.name
+    lines.append(f"**戦略バリアント:** `{variant_label}`")
     lines.append("")
 
     if risk_gate.risk_off:
@@ -91,6 +100,40 @@ def build_report(
 
     lines.append("")
 
+    # --- Turnover constraint summary (Phase 2.3) ---
+    if prev_weights is not None and turnover is not None:
+        to_cfg = cfg.turnover
+        eff_limit = to_cfg.effective_limit
+        mode_label = to_cfg.mode_label
+        was_limited = proposed_turnover is not None and proposed_turnover > eff_limit + 1e-9
+
+        if was_limited:
+            to_status = "⚠️ PASS_WITH_CAUTION"
+        else:
+            to_status = "✅ PASS"
+
+        lines.append("## ターンオーバー制約")
+        lines.append("")
+
+        if to_cfg.migration_mode:
+            lines.append(f"- モード：**{mode_label}**（通常上限：{to_cfg.normal_limit:.1%}、移行上限：{to_cfg.migration_limit:.1%}）")
+        else:
+            lines.append(f"- モード：**{mode_label}**")
+            lines.append(f"- 上限：**{eff_limit:.1%}**")
+
+        if proposed_turnover is not None:
+            lines.append(f"- 推定ターンオーバー（制限前）：**{proposed_turnover:.1%}**")
+        lines.append(f"- 実績ターンオーバー（制限後）：**{turnover:.1%}**")
+        lines.append(f"- 判定：{to_status}")
+
+        if to_cfg.migration_mode:
+            lines.append("")
+            lines.append(
+                "> 注意：移行運用モードは配分ルール変更直後の一時的な設定です。"
+                f"通常運用では {to_cfg.normal_limit:.0%} 上限に戻すことを推奨します。"
+            )
+        lines.append("")
+
     # --- Turnover analysis ---
     if prev_weights is not None and turnover is not None:
         lines.append("## ターンオーバー分析")
@@ -131,6 +174,26 @@ def build_report(
     lines.append(f"- キャッシュ系合計: **{cash_weight:.1%}**")
     lines.append("")
 
+    # --- Risk-ON defensive weight check (Phase 2.4) ---
+    if risk_mode_check is not None and risk_mode_check.enabled:
+        status_icon = {
+            "PASS": "✅", "PASS_WITH_CAUTION": "⚠️",
+            "REVIEW_REQUIRED": "🔶", "N/A": "—",
+        }.get(risk_mode_check.status, risk_mode_check.status)
+
+        lines.append("## Risk-ON 防御資産比率チェック")
+        lines.append("")
+        lines.append(f"- Riskモード：**{risk_mode_check.risk_mode}**")
+        lines.append(f"- 防御資産比率：**{risk_mode_check.defensive_weight:.1%}**")
+        lines.append(f"- 判定：{status_icon} {risk_mode_check.status}")
+        lines.append("")
+
+        if risk_mode_check.status != "PASS":
+            lines.append(f"> {risk_mode_check.message}")
+            if risk_mode_check.status == "REVIEW_REQUIRED":
+                lines.append("> score / volatility 配分により低ボラ資産へ偏っている可能性があります。手動確認してください。")
+            lines.append("")
+
     # --- Correlation matrix ---
     if cfg.report.include_correlation_matrix:
         selected = list(weights.keys())
@@ -155,6 +218,37 @@ def build_report(
                     lines.append(f"- {a} / {b}: {c:.2f}")
                 lines.append("")
 
+    # --- Pre-Trade Gate section (Phase 2.6) ---
+    if pre_trade_gate is not None and pre_trade_gate.enabled:
+        status_icon = {
+            "PASS": "✅", "FAIL": "❌", "PASS_WITH_CAUTION": "⚠️", "REVIEW_REQUIRED": "🔶",
+        }.get(pre_trade_gate.overall_status, pre_trade_gate.overall_status)
+
+        lines.append("## Pre-Trade Gate（定量制約チェック）")
+        lines.append("")
+        lines.append(f"- 総合判定：{status_icon} **{pre_trade_gate.overall_status}**")
+        if pre_trade_gate.overall_status not in ("PASS", "N/A"):
+            lines.append("")
+            lines.append("> ⚠️ 手動確認必須。自動売買は行いません。")
+        lines.append("")
+
+        display_checks = [c for c in pre_trade_gate.checks if c.severity != "INFO"]
+        if display_checks:
+            lines.append("| Check | Status | Severity | 内容 | 値 | 上限 |")
+            lines.append("|---|---|---|---|---:|---:|")
+            for chk in display_checks:
+                chk_icon = {
+                    "PASS": "✅", "FAIL": "❌", "PASS_WITH_CAUTION": "⚠️",
+                    "REVIEW_REQUIRED": "🔶", "N/A": "—",
+                }.get(chk.status, chk.status)
+                val_str = f"{chk.value:.1%}" if chk.value is not None else "—"
+                limit_str = f"{chk.limit:.1%}" if chk.limit is not None else "—"
+                lines.append(
+                    f"| {chk.check_id} | {chk_icon} {chk.status} | {chk.severity}"
+                    f" | {chk.message} | {val_str} | {limit_str} |"
+                )
+            lines.append("")
+
     # --- AI audit section ---
     if audit_result is not None:
         lines.append("## AI監査結果（参考）")
@@ -173,18 +267,29 @@ def build_report(
         lines.append("")
 
         if audit_result.adjustments:
-            lines.append("### 調整提案（参考のみ・適用しない）")
+            lines.append("### AI参考調整案")
             lines.append("")
-            lines.append("| Ticker | 現在配分 | 提案配分 | 理由 |")
-            lines.append("|--------|---------|---------|------|")
-            for adj in audit_result.adjustments:
+            if audit_result.adjustments_invalidated:
                 lines.append(
-                    f"| {adj.ticker} | {adj.current_weight:.1%} | {adj.suggested_weight:.1%} | {adj.reason} |"
+                    "> ⚠️ ±5%制約を超えるAI参考調整案は無効化しました。実配分には反映しません。"
                 )
+                lines.append("")
+            lines.append("| ETF | 現在配分 | AI参考配分 | 差分 | 判定 | 理由 |")
+            lines.append("|-----|--------:|----------:|-----:|------|------|")
+            for adj in audit_result.adjustments:
+                delta = abs(adj.suggested_weight - adj.current_weight)
+                validity = "有効" if adj.valid else "❌ 無効"
+                reason_col = adj.reason if adj.valid else f"{adj.reason}（±5%制約超過: {delta:.1%}）"
+                lines.append(
+                    f"| {adj.ticker} | {adj.current_weight:.1%} | {adj.suggested_weight:.1%}"
+                    f" | {delta:.1%} | {validity} | {reason_col} |"
+                )
+            lines.append("")
+            lines.append("> AI参考調整案は実配分に反映しません。")
             lines.append("")
 
         if audit_result.pre_trade_checks:
-            lines.append("### プレトレードチェック")
+            lines.append("### AI補足チェック")
             lines.append("")
             lines.append("| チェックID | 結果 | 詳細 | 値 |")
             lines.append("|-----------|------|------|-----|")
@@ -203,6 +308,21 @@ def build_report(
                 flag = "✅" if nc.is_nisa_suitable else "❌"
                 lines.append(f"| {nc.ticker} | {flag} | {nc.reason} |")
             lines.append("")
+
+    # --- Investment Committee (Phase 3.1, shadow mode, display-only) ---
+    if committee_result is not None:
+        from src.committee.report_formatter import build_committee_markdown
+        lines.append(build_committee_markdown(committee_result))
+
+    # --- Committee Review Comparison (Phase 3.3, 前回比, display-only) ---
+    if committee_comparison is not None:
+        from src.committee.review_comparison import build_comparison_markdown
+        lines.append(build_comparison_markdown(committee_comparison))
+
+    # --- Committee Advisory (Phase 3.4, 助言, display-only) ---
+    if committee_advisory is not None:
+        from src.committee.advisory import build_advisory_markdown
+        lines.append(build_advisory_markdown(committee_advisory))
 
     # --- Warnings ---
     lines.append("## 注意事項")

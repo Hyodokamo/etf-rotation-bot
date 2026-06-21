@@ -59,6 +59,113 @@ def _check_forbidden(text: str) -> None:
             logger.warning(f"Signal Digest contains forbidden word: '{word}'")
 
 
+# Member display labels (same names as the monthly committee digest).
+_MEMBER_LABELS: dict[str, str] = {
+    "aqr_meb": "AQR/Meb",
+    "howard_marks": "Howard Marks",
+    "rob_arnott": "Rob Arnott",
+    "core_ai_auditor": "Core AI Auditor",
+    "buffett": "Buffett",
+    "paul_tudor_jones": "Paul Tudor Jones",
+    "druckenmiller": "Druckenmiller",
+}
+
+_BOARD_LINE_MAX = 72
+
+
+def _member_label(member_id: str) -> str:
+    return _MEMBER_LABELS.get(member_id, member_id)
+
+
+def _board_trunc(text: str) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= _BOARD_LINE_MAX else text[: _BOARD_LINE_MAX - 1] + "…"
+
+
+def board_summary_lines(result) -> list[str]:
+    """Phone-readable board summary for one candidate: 賛成Top1 / 反対Top1 / AI監査一言.
+
+    Uses committee member outputs when present; falls back to the aggregated
+    positive_reasons / dissenting_views otherwise. Returns [] when nothing to show.
+    Advisory only — never a buy order; no order quantity; final decision is human.
+    """
+    members = list(getattr(result, "member_outputs", None) or [])
+    lines: list[str] = []
+
+    # 賛成 Top1 (highest-scoring positive member with a rationale)
+    from src.signals.signal_models import MemberStance
+    positives = [
+        m for m in members
+        if getattr(m, "stance", None) == MemberStance.POSITIVE and (m.rationale or "").strip()
+    ]
+    if positives:
+        top = max(positives, key=lambda m: (m.score, m.confidence))
+        lines.append(f"賛成: {_member_label(top.member_id)} — {_board_trunc(top.rationale)}")
+    elif getattr(result, "positive_reasons", None):
+        lines.append(f"賛成: {_board_trunc(result.positive_reasons[0])}")
+
+    # 反対 Top1 (member with the strongest objection = lowest score among dissenters)
+    dissenters = [m for m in members if (getattr(m, "dissenting_view", "") or "").strip()]
+    if dissenters:
+        top = min(dissenters, key=lambda m: m.score)
+        lines.append(f"反対: {_member_label(top.member_id)} — {_board_trunc(top.dissenting_view)}")
+    elif getattr(result, "dissenting_views", None):
+        lines.append(f"反対: {_board_trunc(result.dissenting_views[0])}")
+
+    # AI監査 (core_ai_auditor one-liner, if present)
+    auditor = next((m for m in members if m.member_id == "core_ai_auditor"), None)
+    if auditor is not None:
+        txt = (auditor.dissenting_view or auditor.rationale or "").strip()
+        if txt:
+            lines.append(f"AI監査: {_member_label('core_ai_auditor')} — {_board_trunc(txt)}")
+
+    return (["ボード要約:"] + lines) if lines else []
+
+
+def candidate_items_for_blocks(results) -> list[dict]:
+    """Convert candidate SignalResults to watchlist-style dicts for the button blocks.
+
+    Only BUY_CANDIDATE / HIGH_PRIORITY_CANDIDATE are returned (NO_ACTION / WATCH /
+    HOLD_OFF / REJECT are not actionable buy candidates).
+    """
+    from src.signals.signal_models import FinalSignal
+
+    out: list[dict] = []
+    for r in results:
+        if r.final_signal in (FinalSignal.BUY_CANDIDATE, FinalSignal.HIGH_PRIORITY_CANDIDATE):
+            out.append({
+                "ticker": r.symbol,
+                "status": r.final_signal.value,
+                "confidence": f"{r.confidence:.2f}",
+                "next_review_date": getattr(r, "next_review_date", None) or "",
+            })
+    return out
+
+
+def deliver_signal_digest(results, digest_text: str, *, channel_id: str | None = None) -> dict:
+    """Deliver the signal digest, attaching the existing decision buttons when candidates exist.
+
+    - Candidates present → `build_signal_review_blocks()` via Bot Token
+      (`post_committee_message` falls back to Webhook text if no Bot Token/channel).
+    - No candidates → plain Webhook text (`post_signal_digest`).
+
+    Returns {"delivery", "buttons", "ok", "candidates"}. Notification only —
+    never modifies watchlist/history, never an order, never auto-trade.
+    """
+    items = candidate_items_for_blocks(results)
+    if items:
+        from src.slack_publish import post_committee_message
+        from src.slack_signal_actions import build_signal_review_blocks
+
+        blocks = build_signal_review_blocks(items)
+        res = dict(post_committee_message(digest_text, blocks, channel_id))
+        res["candidates"] = len(items)
+        return res
+
+    ok = post_signal_digest(digest_text)
+    return {"delivery": "webhook", "buttons": False, "ok": ok, "candidates": 0}
+
+
 def _macro_line(market_data: dict[str, dict]) -> str | None:
     """Extract VIX / US10Y / DXY from any available market data row."""
     for sym in ("SPY", "QQQ", "SOXX", "SMH", "ITA"):
@@ -172,6 +279,8 @@ def build_signal_digest_text(
             conf = f"{r.confidence:.0%}"
             nrd = getattr(r, "next_review_date", None) or ""
             lines.append(f"- *{r.symbol}*: {reason} （conf={conf}）{' 次回=' + nrd if nrd else ''}")
+            for bl in board_summary_lines(r):
+                lines.append(f"  {bl}")
         lines.append("")
 
     # ── BUY_CANDIDATE ─────────────────────────────────────────────────────────
@@ -182,6 +291,8 @@ def build_signal_digest_text(
             conf = f"{r.confidence:.0%}"
             nrd = getattr(r, "next_review_date", None) or ""
             lines.append(f"- *{r.symbol}*: {reason} （conf={conf}）{' 次回=' + nrd if nrd else ''}")
+            for bl in board_summary_lines(r):
+                lines.append(f"  {bl}")
         lines.append("")
 
     # ── WATCH / HOLD_OFF ──────────────────────────────────────────────────────

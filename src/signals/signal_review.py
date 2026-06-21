@@ -183,19 +183,31 @@ def record_human_signal_decision(
     log_path: str | Path = DEFAULT_HUMAN_DECISION_LOG_PATH,
     archive_dir: str | Path = DEFAULT_ARCHIVE_DIR,
     dry_run: bool = False,
+    create_if_missing: bool = False,
+    protect_human_locked: bool = False,
 ) -> dict:
     """Record a human decision for a watchlist symbol.
 
     Returns a result dict with: symbol, decision, prev_status, new_status, note,
-    no_order_quantity=True, no_auto_trade=True, sell_signal_reserved=True.
+    final_decision_by_human=True, no_order_quantity=True, no_auto_trade=True,
+    sell_signal_reserved=True, created_new_entry, human_locked.
 
-    Raises ValueError if the symbol is not found in the watchlist, or if
-    the decision string is not a valid HUMAN_DECISIONS member.
+    Raises ValueError if the decision string is invalid, or if the symbol is not
+    in the watchlist AND ``create_if_missing`` is False (default — preserves CLI
+    behavior).
+
+    Mobile MVP options (used by the Slack button path):
+    - ``create_if_missing=True``: if the symbol is not in the watchlist, create a
+      new row from the button's symbol instead of raising (a phone user can act on
+      a freshly-pushed candidate even before the watchlist persists it).
+    - ``protect_human_locked=True``: never overwrite an existing USER_APPROVED /
+      USER_REJECTED row — the prior human decision wins (status change is skipped
+      and the attempt is logged).
 
     Safety guarantees:
     - USER_APPROVED / USER_REJECTED can only be set here (human-only)
     - AI cannot call this function from signal engine / committee
-    - No order quantity, no auto-trade, no brokerage
+    - Button press is a *decision record*, never a buy order / quantity / auto-trade
     - signal_history.csv is never modified
     - ai_sleeve_state.csv / etf_master.csv are never modified
     """
@@ -213,14 +225,23 @@ def record_human_signal_decision(
     today = date.today().isoformat()
 
     existing_row = next((r for r in rows if r.get("ticker", "").upper() == symbol), None)
-    if existing_row is None:
+    symbol_missing = existing_row is None
+    if symbol_missing and not create_if_missing:
         raise ValueError(
             f"Symbol '{symbol}' not found in watchlist '{watchlist_path}'. "
             "Run --crash-signal-check first to add it to the watchlist."
         )
 
-    prev_status = existing_row.get("status", "")
+    prev_status = existing_row.get("status", "") if existing_row else ""
     new_status = _DECISION_TO_STATUS[decision]  # None for USER_NOTE_ONLY
+
+    # Human-lock: an existing human decision is never overwritten by a different one.
+    human_locked = (
+        protect_human_locked
+        and prev_status in HUMAN_LOCKED_STATUSES
+        and new_status is not None
+        and new_status != prev_status
+    )
 
     result = {
         "as_of_date": today,
@@ -228,18 +249,30 @@ def record_human_signal_decision(
         "symbol": symbol,
         "decision": decision,
         "prev_status": prev_status,
-        "new_status": new_status if new_status is not None else prev_status,
+        "new_status": prev_status if (human_locked or new_status is None) else new_status,
         "note": note,
         "updated_by": f"human:{decision}",
+        "created_new_entry": symbol_missing and not human_locked,
+        "human_locked": human_locked,
+        "final_decision_by_human": True,
         "no_order_quantity": True,
         "no_auto_trade": True,
         "sell_signal_reserved": True,
     }
 
+    if human_locked:
+        logger.info(
+            f"Signal review: {symbol} is human-locked ('{prev_status}'); "
+            f"change to {new_status} skipped (prior human decision kept)"
+        )
+        _append_human_decision_log(result, log_path)
+        return result
+
     if dry_run:
         logger.info(
             f"Signal review (dry_run): {symbol} {decision} "
             f"→ {new_status or '(no status change)'}"
+            + (" [new entry]" if symbol_missing else "")
         )
         _append_human_decision_log(result, log_path)
         return result
@@ -249,25 +282,41 @@ def record_human_signal_decision(
         horizon = _REVIEW_HORIZON.get(decision, 14)
         next_review = (date.today() + timedelta(days=horizon)).isoformat()
 
-        updated_rows: list[dict] = []
-        for row in rows:
-            if row.get("ticker", "").upper() == symbol:
-                updated = dict(row)
-                updated_reason = row.get("reason_summary", "") or ""
-                if note:
-                    updated_reason = (
-                        f"[{decision}] {note[:60]} | {updated_reason}"
-                    )[:120]
-                updated.update({
-                    "status": new_status,
-                    "last_reviewed_at": now_ts,
-                    "next_review_date": next_review,
-                    "updated_by": f"human:{decision}",
-                    "reason_summary": updated_reason,
-                })
-                updated_rows.append(updated)
-            else:
-                updated_rows.append(row)
+        if symbol_missing:
+            # Create a new row from the button's symbol (USER decision only).
+            new_reason = (f"[{decision}] {note[:60]}" if note else f"[{decision}]")[:120]
+            new_row = {col: "" for col in WATCHLIST_COLUMNS}
+            new_row.update({
+                "ticker": symbol,
+                "status": new_status,
+                "signal_side": "BUY",
+                "last_reviewed_at": now_ts,
+                "next_review_date": next_review,
+                "updated_by": f"human:{decision}",
+                "reason_summary": new_reason,
+            })
+            updated_rows = list(rows) + [new_row]
+            logger.info(f"Signal review: created new watchlist entry {symbol} → {new_status}")
+        else:
+            updated_rows = []
+            for row in rows:
+                if row.get("ticker", "").upper() == symbol:
+                    updated = dict(row)
+                    updated_reason = row.get("reason_summary", "") or ""
+                    if note:
+                        updated_reason = (
+                            f"[{decision}] {note[:60]} | {updated_reason}"
+                        )[:120]
+                    updated.update({
+                        "status": new_status,
+                        "last_reviewed_at": now_ts,
+                        "next_review_date": next_review,
+                        "updated_by": f"human:{decision}",
+                        "reason_summary": updated_reason,
+                    })
+                    updated_rows.append(updated)
+                else:
+                    updated_rows.append(row)
 
         save_watchlist(updated_rows, watchlist_path, dry_run=False, archive_dir=archive_dir)
         logger.info(
@@ -275,7 +324,7 @@ def record_human_signal_decision(
             f"(prev={prev_status!r} → new={new_status!r})"
         )
     else:
-        # USER_NOTE_ONLY: no watchlist write, log only
+        # USER_NOTE_ONLY: no watchlist write, log only (even if symbol missing)
         logger.info(
             f"Signal review: {symbol} USER_NOTE_ONLY — status='{prev_status}' unchanged, note logged"
         )

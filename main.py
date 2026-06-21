@@ -325,6 +325,18 @@ def parse_args() -> argparse.Namespace:
         help="Dry-run: generate signals in memory only; do not write watchlist or history files.",
     )
     parser.add_argument(
+        "--persist-candidates",
+        action="store_true",
+        default=False,
+        dest="persist_candidates",
+        help=(
+            "With --crash-signal-check: even in --dry-run, safely upsert ONLY "
+            "BUY_CANDIDATE / HIGH_PRIORITY_CANDIDATE into data/watchlist.csv so the "
+            "Signal Review is never empty. Human-locked rows (USER_APPROVED/"
+            "USER_REJECTED) are never overwritten. No orders, no quantities, no auto-trade."
+        ),
+    )
+    parser.add_argument(
         "--market-data-file",
         default=None,
         dest="market_data_file",
@@ -848,6 +860,7 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
         load_watchlist,
         save_watchlist,
         update_watchlist_entry,
+        upsert_candidate_entries,
     )
 
     mdf_cfg = load_market_data_config("config/market_data_config.yaml")
@@ -966,11 +979,29 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
 
     if not dry_run and results:
         save_watchlist(watchlist, watchlist_path, dry_run=False, archive_dir=archive_dir)
+    elif getattr(args, "persist_candidates", False) and results:
+        # Mobile MVP: even in dry-run, persist ONLY buy candidates so the Signal
+        # Review is never empty. Human-locked rows are never overwritten.
+        base_rows = load_watchlist(watchlist_path)
+        merged_rows, upserted = upsert_candidate_entries(
+            base_rows, results, updated_by="crash_signal_committee"
+        )
+        if upserted:
+            save_watchlist(merged_rows, watchlist_path, dry_run=False, archive_dir=archive_dir)
+            logger.info(f"Persisted {upserted} candidate(s) to watchlist (safe upsert, dry-run)")
+        else:
+            logger.info("No candidate-status results to persist (safe upsert)")
 
-    # Phase 5.4: Slack Signal Digest (advisory only; no orders, no brokerage)
+    # Phase 5.4 + Mobile MVP: Slack Signal Digest (advisory only; no orders, no brokerage).
+    # When buy candidates exist, attach the existing interactive decision buttons
+    # (Bot Token), falling back to Webhook text otherwise.
     if getattr(args, "signal_slack", False):
         from src.signals.market_data_fetcher import MARKET_REFERENCE_ROLES
-        from src.signals.slack_signal_digest import build_signal_digest_text, post_signal_digest
+        from src.signals.slack_signal_digest import (
+            build_signal_digest_text,
+            candidate_items_for_blocks,
+            deliver_signal_digest,
+        )
 
         ref_syms = [sym for sym, role in roles.items() if role in MARKET_REFERENCE_ROLES]
         current_watchlist = load_watchlist(watchlist_path)
@@ -985,20 +1016,31 @@ def _handle_crash_signal_check(args: argparse.Namespace) -> None:
             global_only_skipped_count=global_only_skipped_count,
             global_triggers=triggers or None,
         )
-        if dry_run:
-            sys.stdout.buffer.write(b"\n[SIGNAL-SLACK] Digest (dry-run - not posted to Slack)\n\n")
-            sys.stdout.buffer.write(digest_text.encode("utf-8", errors="replace"))
-            sys.stdout.buffer.write(b"\n")
-            sys.stdout.buffer.flush()
-        else:
-            ok = post_signal_digest(digest_text)
-            if ok:
-                print("Signal Digest: Slack送信完了")
+
+        has_candidates = bool(candidate_items_for_blocks(results))
+        channel = os.environ.get("SLACK_CHANNEL_ID", "").strip() or None
+
+        # Notification only (no file writes). Candidates are pushed even in dry-run
+        # (with buttons when Bot Token + channel are set); a no-candidate dry-run
+        # keeps the prior console-only behavior to avoid daily noise.
+        if has_candidates or not dry_run:
+            delivery = deliver_signal_digest(results, digest_text, channel_id=channel)
+            if delivery.get("ok"):
+                kind = "ボタン付き" if delivery.get("buttons") else "テキスト"
+                print(
+                    f"Signal Digest: Slack送信完了（{kind} / 候補{delivery.get('candidates', 0)}件）"
+                )
             else:
                 print("Signal Digest: Slack未設定または送信失敗（コンソール出力のみ）")
                 sys.stdout.buffer.write(digest_text.encode("utf-8", errors="replace"))
                 sys.stdout.buffer.write(b"\n")
                 sys.stdout.buffer.flush()
+
+        if dry_run:
+            sys.stdout.buffer.write(b"\n[SIGNAL-SLACK] Digest (dry-run)\n\n")
+            sys.stdout.buffer.write(digest_text.encode("utf-8", errors="replace"))
+            sys.stdout.buffer.write(b"\n")
+            sys.stdout.buffer.flush()
 
     # Determine market_regime for report
     market_regime = (

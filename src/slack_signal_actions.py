@@ -344,13 +344,18 @@ def route_signal_action(
             message=f"既に記録済みです（{symbol} / {label}）。",
         )
 
-    # 5. Record decision (read watchlist + save with backup + append official log)
+    # 5. Record decision (read watchlist + save with backup + append official log).
+    #    create_if_missing: a phone user can act on a freshly-pushed candidate even
+    #    before it is persisted. protect_human_locked: never clobber a prior
+    #    USER_APPROVED / USER_REJECTED.
     try:
         result = record_human_signal_decision(
             symbol, human_decision, note="",
             watchlist_path=watchlist_path,
             log_path=log_path,
             dry_run=dry_run,
+            create_if_missing=True,
+            protect_human_locked=True,
         )
     except ValueError as exc:
         logger.warning(f"[signal_actions] record error: {exc}")
@@ -362,6 +367,18 @@ def route_signal_action(
         logger.error(f"[signal_actions] unexpected error: {type(exc).__name__}: {exc}")
         return SignalActionResult(ok=False, message="記録中にエラーが発生しました。")
 
+    # 5b. Human-locked: a prior human decision exists — do not overwrite.
+    if result.get("human_locked"):
+        prev = result.get("prev_status", "")
+        return SignalActionResult(
+            ok=True, recorded=False, blocked=True, symbol=symbol,
+            human_decision=human_decision,
+            message=(
+                f"既に人間判断済み（{prev}）のため変更しません: {symbol}。"
+                "これは判断の記録であり、売買承認ではありません。"
+            ),
+        )
+
     # 6. Write idempotency record (best-effort; never breaks the flow)
     try:
         _append_idempotency_record(idempotency_log, action_id, user_id, symbol, human_decision)
@@ -369,11 +386,15 @@ def route_signal_action(
         logger.warning(f"[signal_actions] idempotency log write failed: {exc}")
 
     label = SIGNAL_DECISION_LABELS.get(human_decision, human_decision)
+    created = "（新規Watchlist登録）" if result.get("created_new_entry") else ""
     return SignalActionResult(
         ok=True, recorded=True, symbol=symbol, human_decision=human_decision,
         no_order_quantity=result.get("no_order_quantity", True),
         no_auto_trade=result.get("no_auto_trade", True),
-        message=f"記録しました: {symbol} — {label}（自動売買なし、注文数量計算なし）",
+        message=(
+            f"記録しました: {symbol} — {label}{created}。"
+            "判断の記録です（売買承認ではありません）。自動売買なし／注文数量計算なし／証券口座連携なし。"
+        ),
     )
 
 
@@ -496,11 +517,13 @@ def route_signal_note_submission(
                                   message="メモが空です。記録しません。")
     note = note[:MAX_SIGNAL_NOTE_LEN]
 
-    # 4. Record (USER_NOTE_ONLY = no status change; note appended to log only)
+    # 4. Record (USER_NOTE_ONLY = no status change; note appended to log only).
+    #    create_if_missing keeps a note from failing on a not-yet-persisted symbol.
     try:
         result = record_human_signal_decision(
             symbol, "USER_NOTE_ONLY", note=note,
             watchlist_path=watchlist_path, log_path=log_path,
+            create_if_missing=True,
         )
     except ValueError as exc:
         logger.warning(f"[signal_note] record error: {exc}")

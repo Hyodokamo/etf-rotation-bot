@@ -121,6 +121,10 @@ def build_steps(args: argparse.Namespace) -> list[list[str]]:
         step2.append("--committee-on-trigger-only")
     else:
         step2.append("--full-committee-scan")
+    # Mobile MVP: opt-in safe candidate persistence even in dry-run, so the daily
+    # Signal Review is never empty. Only BUY_CANDIDATE/HIGH_PRIORITY are persisted.
+    if getattr(args, "persist_candidates", False):
+        step2.append("--persist-candidates")
     steps.append(step2)
 
     # Step 3: review overdue
@@ -317,6 +321,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Run LLM committee for ALL candidate symbols (overrides default trigger gate). "
             "Use when a comprehensive AI scan is needed regardless of trigger status. "
             "Even with this flag: no orders, no auto-trade, no brokerage."
+        ),
+    )
+    parser.add_argument(
+        "--persist-candidates",
+        action="store_true",
+        default=False,
+        dest="persist_candidates",
+        help=(
+            "Safely persist ONLY buy candidates (BUY_CANDIDATE/HIGH_PRIORITY_CANDIDATE) "
+            "to data/watchlist.csv even in dry-run, so the daily Signal Review is never "
+            "empty. Human-locked rows are never overwritten. No orders, no auto-trade."
         ),
     )
     return parser.parse_args(argv)

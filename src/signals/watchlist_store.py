@@ -40,6 +40,11 @@ AI_SETTABLE_STATUS = frozenset({
 })
 HUMAN_LOCKED_STATUS = frozenset({"USER_APPROVED", "USER_REJECTED"})
 
+# Mobile MVP: only these are persisted by the candidate-only safe upsert path.
+# NO_ACTION / WATCH / HOLD_OFF / REJECT_FOR_NOW are intentionally excluded so a
+# dry-run daily run only ever accumulates actionable buy candidates.
+CANDIDATE_STATUS = frozenset({"BUY_CANDIDATE", "HIGH_PRIORITY_CANDIDATE"})
+
 _REVIEW_HORIZON_DAYS: dict[str, int] = {
     "HIGH_PRIORITY_CANDIDATE": 7,
     "BUY_CANDIDATE": 7,
@@ -182,6 +187,81 @@ def update_watchlist_entry(
         out.append(new_row)
 
     return out
+
+
+def upsert_candidate_entries(
+    rows: list[dict],
+    results: list,
+    *,
+    updated_by: str = "crash_signal_committee",
+) -> tuple[list[dict], int]:
+    """Safely upsert ONLY candidate-status results into watchlist rows (in memory).
+
+    Mobile MVP helper: lets a daily (otherwise dry-run) run accumulate actionable
+    buy candidates so the Signal Review is never empty, without persisting noise.
+
+    Rules (advisory only — no orders, no quantities, no auto-trade):
+    - Only BUY_CANDIDATE / HIGH_PRIORITY_CANDIDATE are persisted. NO_ACTION /
+      WATCH / HOLD_OFF / REJECT_FOR_NOW are skipped (never積まない).
+    - Human-locked rows (USER_APPROVED / USER_REJECTED) are NEVER overwritten.
+    - etf_master / ai_sleeve_state / signal_history files are never touched.
+
+    Returns (new_rows, upserted_count). Caller persists via save_watchlist().
+    """
+    out: list[dict] = list(rows)
+    index: dict[str, int] = {
+        (r.get("ticker", "") or "").upper(): i for i, r in enumerate(out)
+    }
+    now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    count = 0
+
+    for result in results:
+        status = result.final_signal.value
+        if status not in CANDIDATE_STATUS:
+            continue
+
+        ticker = result.symbol.upper()
+        horizon = _REVIEW_HORIZON_DAYS.get(status, 7)
+        next_review = (date.today() + timedelta(days=horizon)).isoformat()
+        trigger_prefix = ""
+        if result.trigger_labels:
+            trigger_prefix = "|".join(result.trigger_labels[:2]) + " → "
+        reason_summary = (trigger_prefix + result.recommended_action_text)[:120]
+        risk_flag_str = "|".join(result.risk_flags[:5])
+
+        fields = {
+            "status": status,
+            "final_signal": status,
+            "signal_side": result.signal_side.value,
+            "confidence": f"{result.confidence:.2f}",
+            "risk_flags": risk_flag_str,
+            "reason_summary": reason_summary,
+            "last_reviewed_at": now,
+            "next_review_date": next_review,
+            "updated_by": updated_by,
+        }
+
+        if ticker in index:
+            existing = out[index[ticker]]
+            if existing.get("status", "") in HUMAN_LOCKED_STATUS:
+                logger.info(
+                    f"Watchlist upsert: {ticker} is human-locked "
+                    f"('{existing.get('status')}'); candidate upsert skipped"
+                )
+                continue
+            updated = dict(existing)
+            updated.update(fields)
+            out[index[ticker]] = updated
+            count += 1
+        else:
+            new_row = {col: "" for col in WATCHLIST_COLUMNS}
+            new_row["ticker"] = ticker
+            new_row.update(fields)
+            out.append(new_row)
+            index[ticker] = len(out) - 1
+            count += 1
+
+    return out, count
 
 
 def append_signal_history(

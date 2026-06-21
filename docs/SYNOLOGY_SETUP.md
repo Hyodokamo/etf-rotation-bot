@@ -229,6 +229,83 @@ head -3 .env  # 内容確認（秘密情報に注意）
 
 ---
 
+## 11. Slack Socket Mode 常駐（個別銘柄をスマホで判断記録）
+
+個別銘柄ウォッチ / Signal Review を **スマホSlackのボタンだけで判断記録** したい場合、
+Slack の Socket Mode リスナーをNASで常駐させます（既存 `scripts/run_slack_bot.sh`）。
+
+> ボタン押下は **判断の記録** です。売買承認・注文・数量計算ではありません。
+> 自動売買なし／注文数量計算なし／証券口座連携なし。最終判断は人間が行います。
+
+### 11.1 必要な `.env` 項目
+
+```env
+# Slack Bot（chat.postMessage でボタン付き投稿）
+SLACK_BOT_TOKEN=xoxb-...
+# Slack App（Socket Mode 接続）
+SLACK_APP_TOKEN=xapp-...
+# ボタン付き投稿先チャンネルID（未設定だとボタンなしWebhook送信になる）
+SLACK_CHANNEL_ID=C0123456789
+# ボタン操作を許可するユーザーID（カンマ区切り、本人のみ推奨）
+SLACK_ALLOWED_USER_IDS=U0123456789
+```
+
+`SLACK_WEBHOOK_URL` は従来どおりのテキスト通知に使われます（Bot Token と併用可）。
+
+### 11.2 候補をwatchlistに積む（Signal Reviewを空にしない）
+
+NASの日次実行は安全のため `--dry-run` で、既定では `data/watchlist.csv` を更新しません。
+**買い候補だけを安全にwatchlistへ反映**するには `--persist-candidates` を付けます
+（`BUY_CANDIDATE` / `HIGH_PRIORITY_CANDIDATE` のみ。`USER_APPROVED` / `USER_REJECTED` は不可侵）。
+
+```bash
+# 日次（候補のみ安全upsert + Slack通知）
+python scripts/daily_signal_check.py --persist-candidates
+
+# 単発（候補ありならボタン付きでSlack投稿）
+python main.py --crash-signal-check --persist-candidates --signal-slack
+```
+
+候補が1件以上 かつ `SLACK_BOT_TOKEN` + `SLACK_CHANNEL_ID` があるとき、通知に
+判断ボタン（候補として確認済み / Watch継続 / Hold Off / 却下 / 再評価依頼 / メモ追加）が付きます。
+
+### 11.3 リスナーの起動（手動）
+
+```bash
+source .venv/bin/activate
+bash scripts/run_slack_bot.sh
+# 検証だけ（Slack未接続でpayload検証）: bash scripts/run_slack_bot.sh --dry-run
+```
+
+### 11.4 DSMタスクスケジューラーで常駐（起動時自動）
+
+1. DSM → コントロールパネル → タスクスケジューラ → 作成 → トリガーされたタスク → ユーザー定義スクリプト
+2. イベント: **ブートアップ**、ユーザー: `HyodoAdmin`
+3. スクリプト:
+
+```bash
+source /var/services/homes/HyodoAdmin/apps/etf-rotation-bot/.venv/bin/activate
+bash /var/services/homes/HyodoAdmin/apps/etf-rotation-bot/scripts/run_slack_bot.sh \
+  >> /var/services/homes/HyodoAdmin/apps/etf-rotation-bot/logs/slack_bot.log 2>&1
+```
+
+（Docker運用の場合は `docker compose up -d slack-bot` でも可）
+
+### 11.5 常駐が落ちた場合のフォールバック
+
+- ボタン押下は**反応しなくなります**（リスナー停止中）。
+- ただし **Webhookのテキスト通知は届き続けます**（`SLACK_WEBHOOK_URL`）。
+- 判断記録は **PC/NASのCLIでフォールバック可能**:
+
+```bash
+python main.py --signal-review --review-symbol ITA \
+  --human-signal-decision USER_APPROVED --human-signal-note "候補として確認済み"
+```
+
+つまりリスナー停止は「スマホ完結が一時的に使えない」だけで、通知と記録手段は失われません。
+
+---
+
 ## 安全性確認
 
 | 確認項目 | 状態 |

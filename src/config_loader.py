@@ -124,6 +124,33 @@ class StrategyVariantConfig(BaseModel):
     volatility_floor: float = 0.05
 
 
+class AllocationConstraintsRiskOnConfig(BaseModel):
+    max_fixed_income_weight: float = 0.40
+    max_defensive_weight: float = 0.40
+
+
+class AllocationConstraintsRedistributionConfig(BaseModel):
+    method: Literal["score_weighted", "equal"] = "score_weighted"
+    exclude_categories: list[str] = Field(
+        default_factory=lambda: ["bond", "cash_like", "commodity", "fx"]
+    )
+
+
+class AllocationConstraintsConfig(BaseModel):
+    """Risk-ON category constraint nudge applied after trim, before the Pre-Trade Gate."""
+    enabled: bool = False
+    apply_before_pre_trade_gate: bool = True
+    fixed_income_categories: list[str] = Field(default_factory=lambda: ["bond", "cash_like"])
+    # defensive_categories defaults to risk_mode_checks.defensive_categories when omitted
+    defensive_categories: list[str] | None = None
+    risk_on: AllocationConstraintsRiskOnConfig = Field(
+        default_factory=AllocationConstraintsRiskOnConfig
+    )
+    redistribution: AllocationConstraintsRedistributionConfig = Field(
+        default_factory=AllocationConstraintsRedistributionConfig
+    )
+
+
 class SlackReviewDecisionConfig(BaseModel):
     enabled: bool = True
     mode: str = "review_decision"
@@ -147,6 +174,9 @@ class AppConfig(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
     ai_audit: AiAuditConfig = Field(default_factory=AiAuditConfig)
     global_settings: GlobalSettings = Field(default_factory=GlobalSettings)
+    allocation_constraints: AllocationConstraintsConfig = Field(
+        default_factory=AllocationConstraintsConfig
+    )
     slack_review_decision: SlackReviewDecisionConfig = Field(default_factory=SlackReviewDecisionConfig)
 
     def production_assets(self) -> list[AssetConfig]:

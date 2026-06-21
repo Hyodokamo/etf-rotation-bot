@@ -1413,6 +1413,29 @@ def main() -> None:
         f"max_portfolio_assets={cfg.global_settings.max_portfolio_assets})"
     )
 
+    # Allocation constraints (MVP): in Risk-ON, nudge fixed_income / defensive to
+    # their caps and redistribute to allowed categories — applied AFTER trim and
+    # BEFORE the Pre-Trade Gate. The gate remains the authoritative last line.
+    allocation_adjustment = None
+    if cfg.allocation_constraints.enabled:
+        from src.allocation_constraints import apply_allocation_constraints
+        final_weights, allocation_adjustment = apply_allocation_constraints(
+            final_weights,
+            ticker_to_category,
+            scores,
+            cfg.allocation_constraints,
+            risk_off=risk_gate.risk_off,
+            max_weight_per_asset=cfg.risk.max_weight_per_asset,
+            defensive_categories=cfg.risk_mode_checks.defensive_categories,
+        )
+        if allocation_adjustment.applied:
+            logger.info(
+                "Allocation constraints applied: fixed_income "
+                f"{allocation_adjustment.fixed_income_before:.1%}→{allocation_adjustment.fixed_income_after:.1%}, "
+                f"defensive {allocation_adjustment.defensive_before:.1%}→{allocation_adjustment.defensive_after:.1%}, "
+                f"fully_satisfied={allocation_adjustment.fully_satisfied}"
+            )
+
     # Phase 2.4: Risk-ON defensive weight check
     risk_mode_check_result = check_risk_mode_consistency(
         weights=final_weights,
@@ -1644,6 +1667,7 @@ def main() -> None:
             committee_advisory=committee_advisory,
             committee_comparison=committee_comparison,
             slack_review_cfg=cfg.slack_review_decision,
+            allocation_adjustment=allocation_adjustment,
         )
     else:
         slack_msg = build_slack_summary(
@@ -1661,6 +1685,7 @@ def main() -> None:
             committee_result=committee_result,
             committee_comparison=committee_comparison,
             committee_advisory=committee_advisory,
+            allocation_adjustment=allocation_adjustment,
         )
 
     # Phase 4.3: attach Monthly Review action buttons (Bot Token) when available;

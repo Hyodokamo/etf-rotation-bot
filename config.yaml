@@ -229,6 +229,35 @@ pre_trade_gate:
     core_equity: 0.60
     commodity: 0.30
 
+allocation_constraints:
+  # Risk-ON時に債券/防御資産が主役化しすぎる問題への対策。
+  # 最終配分（trim後）に対し、Pre-Trade Gate の前でカテゴリ上限へ寄せて再配分する。
+  # Pre-Trade Gate は最終防衛線として温存（本調整で違反が残ればFAILのまま）。
+  enabled: true
+  apply_before_pre_trade_gate: true
+  # fixed_income としてカウントするカテゴリ
+  fixed_income_categories:
+    - bond
+    - cash_like
+  # defensive のカテゴリ（未指定なら risk_mode_checks.defensive_categories を流用）
+  defensive_categories:
+    - bond
+    - cash_like
+    - commodity
+    - fx
+  risk_on:
+    # Risk-ON時の fixed_income / defensive 合計上限（Pre-Trade Gate の bond 40% と整合）
+    max_fixed_income_weight: 0.40
+    max_defensive_weight: 0.40
+  redistribution:
+    method: score_weighted
+    # 再配分先にしない（＝防御側）カテゴリ
+    exclude_categories:
+      - bond
+      - cash_like
+      - commodity
+      - fx
+
 global_settings:
   # 最終配分の最大保有本数（eligible ETF数に応じて自動調整）
   # eligible >= 8 → max_portfolio_assets本

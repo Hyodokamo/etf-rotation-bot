@@ -251,6 +251,7 @@ def build_executive_digest(
     committee_comparison=None,
     slack_review_cfg=None,
     portfolio_context=None,
+    allocation_adjustment=None,
 ) -> str:
     """Compose the concise Slack Investment Committee digest (display-only)."""
     risk = "⚠️ リスクオフ" if risk_off else "✅ リスクオン"
@@ -291,6 +292,11 @@ def build_executive_digest(
     lines.append(f"*今月の結論:* {conclusion}")
     lines.append(f"戦略 `{strategy_variant or '-'}` / モード {risk} / ターンオーバー {to_str}")
     lines.append(f"Top配分: {top5_str}")
+
+    if allocation_adjustment is not None:
+        _adj_line = allocation_adjustment.slack_line()
+        if _adj_line:
+            lines.append(_adj_line)
 
     if audit_result is not None:
         status_val = audit_result.status.value

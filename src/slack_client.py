@@ -57,6 +57,7 @@ def build_slack_summary(
     committee_result=None,
     committee_comparison=None,
     committee_advisory=None,
+    allocation_adjustment=None,
 ) -> str:
     top5 = sorted(weights.items(), key=lambda x: -x[1])[:5]
     # Mobile-friendly: single-line Top配分 (避けるスマホ折返し)。
@@ -86,6 +87,12 @@ def build_slack_summary(
         f"Top配分: {top5_str}",
     ]
     lines = [l for l in lines if l is not None]
+
+    # Allocation constraint nudge (Risk-ON category caps), if it adjusted weights.
+    if allocation_adjustment is not None:
+        adj_line = allocation_adjustment.slack_line()
+        if adj_line:
+            lines.append(adj_line)
 
     if audit_result is not None:
         status_val = audit_result.status.value

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 
 SYSTEM_PROMPT = """あなたはETFポートフォリオの監査専門家です。定量的に算出された推奨配分を審査し、構造的リスク・集中リスク・整合性の観点から客観的な監査意見を提供します。

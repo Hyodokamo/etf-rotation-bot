@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from src.llm.base import BaseLlmClient
 
 _SUPPORTED = ("claude", "openai", "gemini")

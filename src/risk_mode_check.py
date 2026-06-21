@@ -1,4 +1,6 @@
 """Phase 2.4: Risk-ON / defensive allocation consistency check."""
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from src.config_loader import RiskModeCheckConfig

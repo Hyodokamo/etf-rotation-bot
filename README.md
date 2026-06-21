@@ -525,6 +525,36 @@ python main.py --audit-summary --audit-month 2026-06 --audit-output reports/audi
 
 出力先（既定）: `reports/audit/decision_audit_YYYYMM.md`（`reports/` は `.gitignore` 済み）。
 
+## Synology DS224+ NAS での実行
+
+Docker を使わず NAS 上で直接 Python 実行する場合の最短手順です。
+
+```bash
+# 1. 仮想環境を作成・アクティベート
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 2. パッケージインストール（Python 3.8 互換パッケージ含む）
+bash scripts/setup_synology.sh
+
+# 3. 環境変数を設定
+cp .env.example .env
+# .env を編集（ANTHROPIC_API_KEY 等）
+
+# 4. 動作確認
+bash scripts/check_synology.sh
+
+# 5. 実行
+bash scripts/run_synology.sh --no-slack
+```
+
+詳細は [`docs/SYNOLOGY_SETUP.md`](docs/SYNOLOGY_SETUP.md) を参照してください。
+
+**Python 3.8 互換性:**
+- `from __future__ import annotations` を全ファイルに追加済み
+- `eval_type_backport` で Pydantic v2 の型評価に対応
+- `multitasking<0.0.12` で yfinance との互換制約を解決
+
 ## 既知の制限事項・注意点
 
 - 日本円建てETF（1306.T等）と米ドル建てETFを同一スコアで比較しており、**通貨換算は行っていません**

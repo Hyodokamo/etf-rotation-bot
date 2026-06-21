@@ -17,6 +17,8 @@ Outputs:
     outputs/YYYY-MM/run_log.json
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os

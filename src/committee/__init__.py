@@ -1,4 +1,6 @@
 """Phase 3.1/3.2: Investment Committee OS (shadow mode) + decision log."""
+from __future__ import annotations
+
 from src.committee.decision_logger import (
     COMMITTEE_LOG_SCHEMA_VERSION,
     DEFAULT_COMMITTEE_LOG_PATH,

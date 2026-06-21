@@ -1,4 +1,6 @@
 """Phase 2.5: AI audit quality evaluation logger."""
+from __future__ import annotations
+
 import re
 from datetime import date
 from pathlib import Path

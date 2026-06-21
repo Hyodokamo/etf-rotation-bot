@@ -278,7 +278,15 @@ def build_executive_digest(
     else:
         conclusion = f"{'リスクオフ' if risk_off else 'リスクオン'}。定量モデル配分を維持（shadow、配分変更なし）。"
 
+    # Mobile-first header (MVP-1): same phone header as the non-committee path.
+    # Committee detail is kept below — only the reading order changes.
+    from src.slack_blocks import build_mobile_summary_header
+    from src.slack_client import _extract_run_date
+
+    gate_status = pre_trade_gate.overall_status if pre_trade_gate is not None else None
+
     lines: list[str] = []
+    lines.append(build_mobile_summary_header(gate_status, _extract_run_date(report_path)))
     lines.append("*📋 ETF Rotation Bot — Investment Committee Digest*")
     lines.append(f"*今月の結論:* {conclusion}")
     lines.append(f"戦略 `{strategy_variant or '-'}` / モード {risk} / ターンオーバー {to_str}")

@@ -26,6 +26,67 @@ _GATE_ICONS: dict[str, str] = {
     "FAIL": "❌",
 }
 
+# Phase: mobile UX (MVP-1). Per-state phone header content.
+# Each entry: icon / 1行結論（急ぎ度込み） / 推奨アクション。
+# Wording avoids 買う・売る・購入・注文・利確・損切り・今が買い時・必ず上がる.
+_MOBILE_HEADER: dict[str, dict[str, str]] = {
+    "PASS": {
+        "icon": "✅",
+        "conclusion": "制約クリア。確認のみでよく、急ぎの対応はありません。",
+        "action": "内容を確認し、時間のある時に「確認済み」を記録してください。",
+    },
+    "PASS_WITH_CAUTION": {
+        "icon": "⚠️",
+        "conclusion": "おおむね問題なし。軽微な注意はありますが、急ぎの対応は不要です。",
+        "action": "注意点を確認し、確認済み／見送り／再レビューのいずれかを記録してください。",
+    },
+    "REVIEW_REQUIRED": {
+        "icon": "🔶",
+        "conclusion": "注意ポイントあり。記録の前に内容の確認をおすすめします（緊急ではありません）。",
+        "action": "注意点を確認し、確認済み／見送り／再レビューのいずれかを記録してください。",
+    },
+    "FAIL": {
+        "icon": "❌",
+        "conclusion": "売買前チェックの制約に抵触。このままの採用は推奨しません（要対応）。",
+        "action": "見送り、または設定を見直して再レビューしてください（採用する場合は理由メモが必須）。",
+    },
+    "N/A": {
+        "icon": "ℹ️",
+        "conclusion": "今回の判定情報は限定的です。内容を確認してください。",
+        "action": "内容を確認し、必要に応じて判断を記録してください。",
+    },
+}
+
+# Always-on safety notice. Avoids the banned promotional tokens while conveying
+# 自動売買しない／数量計算しない／最終判断は人間 を毎回明示する.
+_MOBILE_SAFETY_NOTE = (
+    "🛡️ 自動売買は行いません。売買数量の計算もしません。最終判断は人間が行います。"
+)
+
+
+def build_mobile_summary_header(
+    gate_status: str | None,
+    run_date: str | None = None,
+) -> str:
+    """Phone-first header: 1行結論・推奨アクション・急ぎ度・自動売買しない注記.
+
+    Placed at the very top of the Slack message so the first 3 lines answer
+    「今月の結論／急ぎ度／やること」. Records decisions only — never trades,
+    never sizes orders. ``gate_status`` accepts PASS / PASS_WITH_CAUTION /
+    REVIEW_REQUIRED / FAIL; unknown or None falls back to the N/A header.
+    """
+    spec = _MOBILE_HEADER.get(gate_status or "N/A", _MOBILE_HEADER["N/A"])
+    month = ""
+    if run_date and len(run_date) >= 7:
+        month = f"（{run_date[:7]}）"
+
+    return "\n".join([
+        f"{spec['icon']} ETF Rotation Bot 月次レビュー{month}",
+        f"今月の結論: {spec['conclusion']}",
+        f"推奨アクション: {spec['action']}",
+        _MOBILE_SAFETY_NOTE,
+    ])
+
 
 def _cli_hint(decision: str, comment: str = "") -> str:
     c = f' --decision-comment "{comment}"' if comment else ""
@@ -53,39 +114,38 @@ def build_review_decision_section(
     gate_icon = _GATE_ICONS.get(gate, "")
 
     lines: list[str] = ["", "*月次レビュー判断*"]
+    # Phone-first導線: スマホでは確認のみ。記録は後でPC/NASで実行する旨を明示。
+    record_intro = "📝 スマホでは内容の確認のみ。判断の記録は後でPC/NASで次のいずれかを実行:"
 
     if gate == "FAIL":
         lines.append(f"{gate_icon} Pre-Trade Gate: FAIL — 以下の制約に抵触しています")
         for f in failures[:5]:
             lines.append(f"  - {f}")
         lines.append("推奨：見送り、または再レビューしてください。")
-        lines.append("⚠️ 自動売買は行いません。")
-        lines.append("")
-        lines.append("判断を記録するには以下のCLIを実行してください（コメント必須）:")
-        lines.append(f"  {_cli_hint('SKIP_THIS_MONTH', '今月は見送り')}")
-        lines.append(f"  {_cli_hint('REQUEST_RERUN', '設定を見直して再実行')}")
-        lines.append(f"  {_cli_hint('MANUAL_OVERRIDE', '警告を理解したうえで採用（理由を記述）')}")
+        lines.append("自動売買は行いません。最終判断は人間が行います。")
+        lines.append(record_intro + "（採用する場合はコメント必須）")
+        lines.append(f"  見送り → {_cli_hint('SKIP_THIS_MONTH')}")
+        lines.append(f"  再レビュー → {_cli_hint('REQUEST_RERUN')}")
+        lines.append(f"  理由を理解して採用 → {_cli_hint('MANUAL_OVERRIDE', '理由')}")
 
     elif gate in ("PASS_WITH_CAUTION", "REVIEW_REQUIRED"):
         lines.append(f"{gate_icon} Pre-Trade Gate: {gate} — 注意あり")
-        lines.append("⚠️ 自動売買は行いません。")
-        lines.append("")
-        lines.append("判断を記録するには以下のCLIを実行してください:")
-        lines.append(f"  {_cli_hint('REVIEW_CONFIRMED')}")
-        lines.append(f"  {_cli_hint('SKIP_THIS_MONTH')}")
-        lines.append(f"  {_cli_hint('REQUEST_RERUN')}")
-        lines.append(f"  {_cli_hint('MANUAL_OVERRIDE', '警告を理解したうえで採用（理由を記述）')}")
+        lines.append("自動売買は行いません。最終判断は人間が行います。")
+        lines.append(record_intro)
+        lines.append(f"  確認済み → {_cli_hint('REVIEW_CONFIRMED')}")
+        lines.append(f"  見送り → {_cli_hint('SKIP_THIS_MONTH')}")
+        lines.append(f"  再レビュー → {_cli_hint('REQUEST_RERUN')}")
+        lines.append(f"  理由を理解して採用 → {_cli_hint('MANUAL_OVERRIDE', '理由')}")
 
     else:
         # PASS or N/A
         if gate == "PASS":
             lines.append(f"{gate_icon} Pre-Trade Gate: PASS")
-        lines.append("自動売買は行いません。")
-        lines.append("")
-        lines.append("判断を記録するには以下のCLIを実行してください:")
-        lines.append(f"  {_cli_hint('REVIEW_CONFIRMED')}")
-        lines.append(f"  {_cli_hint('SKIP_THIS_MONTH')}")
-        lines.append(f"  {_cli_hint('REQUEST_RERUN')}")
+        lines.append("自動売買は行いません。最終判断は人間が行います。")
+        lines.append(record_intro)
+        lines.append(f"  確認済み → {_cli_hint('REVIEW_CONFIRMED')}")
+        lines.append(f"  見送り → {_cli_hint('SKIP_THIS_MONTH')}")
+        lines.append(f"  再レビュー → {_cli_hint('REQUEST_RERUN')}")
 
     return "\n".join(lines)
 

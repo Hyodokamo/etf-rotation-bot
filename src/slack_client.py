@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import os
+import re
 
 import requests
 
 from src.logger import logger
-from src.slack_blocks import build_review_decision_section
+from src.slack_blocks import build_mobile_summary_header, build_review_decision_section
 
 
 def post_to_slack(message: str) -> bool:
@@ -30,6 +33,15 @@ def post_to_slack(message: str) -> bool:
         return False
 
 
+_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+
+def _extract_run_date(report_path: str) -> str | None:
+    """Best-effort YYYY-MM-DD from a report path (e.g. outputs/report_2026-06-20.md)."""
+    m = _DATE_RE.search(report_path or "")
+    return m.group(1) if m else None
+
+
 def build_slack_summary(
     weights: dict[str, float],
     risk_off: bool,
@@ -47,7 +59,8 @@ def build_slack_summary(
     committee_advisory=None,
 ) -> str:
     top5 = sorted(weights.items(), key=lambda x: -x[1])[:5]
-    top5_str = "\n".join(f"  {t}: {w:.1%}" for t, w in top5)
+    # Mobile-friendly: single-line Top配分 (避けるスマホ折返し)。
+    top5_str = " · ".join(f"{t} {w:.1%}" for t, w in top5)
     mode = "⚠️ リスクオフ" if risk_off else "✅ リスクオン"
 
     # Turnover summary with mode info (Phase 2.3)
@@ -61,12 +74,16 @@ def build_slack_summary(
     else:
         to_str = "N/A（初回）"
 
+    # Mobile-first header (MVP-1): 1行結論・推奨アクション・急ぎ度・自動売買しない注記。
+    gate_status = pre_trade_gate.overall_status if pre_trade_gate is not None else None
+    run_date = _extract_run_date(report_path)
+
     lines = [
-        "*ETF Rotation Bot — 月次レポート*",
+        build_mobile_summary_header(gate_status, run_date),
         f"戦略: `{strategy_variant}`" if strategy_variant else None,
         f"モード: {mode}",
         f"ターンオーバー: {to_str}",
-        f"Top5配分:\n{top5_str}",
+        f"Top配分: {top5_str}",
     ]
     lines = [l for l in lines if l is not None]
 
@@ -102,7 +119,10 @@ def build_slack_summary(
         else:
             lines.append(f"防御資産比率：{dw:.1%}（Risk-ONだがやや高め）")
 
-    lines.append(f"レポート: {report_path}")
+    lines.append(
+        f"📄 詳細レポート: {report_path}"
+        "（スマホで開けない場合あり／本要約で判断可）"
+    )
 
     # Phase 3.1: Investment Committee summary (shadow mode, display-only)
     if committee_result is not None:
